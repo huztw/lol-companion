@@ -1,0 +1,238 @@
+{
+  "requestId": "11111111-1111-4111-8111-111111111111",
+  "gameId": 431945471,
+  "schemaVersion": 1,
+  "queueId": 450,
+  "payload": {
+    "requestedParticipantPuuid": "player-a",
+    "participants": [
+      {
+        "puuid": "player-a",
+        "riotIdGameName": "PlayerA",
+        "riotIdTagline": "TST1",
+        "participantId": 1,
+        "teamId": 100,
+        "win": true,
+        "championName": "Annie",
+        "kills": 8,
+        "deaths": 2,
+        "assists": 10,
+        "totalDamageDealtToChampions": 25000,
+        "totalDamageTaken": 14000,
+        "timeCCingOthers": 30,
+        "totalHealsOnTeammates": 1000,
+        "totalDamageShieldedOnTeammates": 500
+      },
+      {
+        "puuid": "player-b",
+        "riotIdGameName": "PlayerB",
+        "riotIdTagline": "TST1",
+        "participantId": 2,
+        "teamId": 100,
+        "win": true,
+        "championName": "Lux",
+        "kills": 6,
+        "deaths": 3,
+        "assists": 12,
+        "totalDamageDealtToChampions": 22000,
+        "totalDamageTaken": 11000,
+        "timeCCingOthers": 18,
+        "totalHealsOnTeammates": 1200,
+        "totalDamageShieldedOnTeammates": 700
+      },
+      {
+        "puuid": "player-c",
+        "riotIdGameName": "PlayerC",
+        "riotIdTagline": "TST1",
+        "participantId": 3,
+        "teamId": 100,
+        "win": true,
+        "championName": "Leona",
+        "kills": 2,
+        "deaths": 4,
+        "assists": 14,
+        "totalDamageDealtToChampions": 9000,
+        "totalDamageTaken": 21000,
+        "timeCCingOthers": 40,
+        "totalHealsOnTeammates": 0,
+        "totalDamageShieldedOnTeammates": 200
+      },
+      {
+        "puuid": "player-d",
+        "riotIdGameName": "PlayerD",
+        "riotIdTagline": "TST1",
+        "participantId": 4,
+        "teamId": 100,
+        "win": true,
+        "championName": "Braum",
+        "kills": 1,
+        "deaths": 5,
+        "assists": 9,
+        "totalDamageDealtToChampions": 7000,
+        "totalDamageTaken": 18000,
+        "timeCCingOthers": 28,
+        "totalHealsOnTeammates": 0,
+        "totalDamageShieldedOnTeammates": 500
+      },
+      {
+        "puuid": "player-e",
+        "riotIdGameName": "PlayerE",
+        "riotIdTagline": "TST1",
+        "participantId": 5,
+        "teamId": 100,
+        "win": true,
+        "championName": "Seraphine",
+        "kills": 1,
+        "deaths": 3,
+        "assists": 11,
+        "totalDamageDealtToChampions": 11000,
+        "totalDamageTaken": 9000,
+        "timeCCingOthers": 12,
+        "totalHealsOnTeammates": 2400,
+        "totalDamageShieldedOnTeammates": 1000
+      },
+      {
+        "puuid": "player-x1",
+        "riotIdGameName": "PlayerX1",
+        "riotIdTagline": "TST1",
+        "participantId": 6,
+        "teamId": 200,
+        "win": false,
+        "championName": "Ahri",
+        "kills": 4,
+        "deaths": 5,
+        "assists": 3,
+        "totalDamageDealtToChampions": 18000,
+        "totalDamageTaken": 9000,
+        "timeCCingOthers": 8,
+        "totalHealsOnTeammates": 0,
+        "totalDamageShieldedOnTeammates": 0
+      },
+      {
+        "puuid": "player-x2",
+        "riotIdGameName": "PlayerX2",
+        "riotIdTagline": "TST1",
+        "participantId": 7,
+        "teamId": 200,
+        "win": false,
+        "championName": "Ezreal",
+        "kills": 5,
+        "deaths": 5,
+        "assists": 2,
+        "totalDamageDealtToChampions": 17000,
+        "totalDamageTaken": 8500,
+        "timeCCingOthers": 4,
+        "totalHealsOnTeammates": 0,
+        "totalDamageShieldedOnTeammates": 0
+      },
+      {
+        "puuid": "player-x3",
+        "riotIdGameName": "PlayerX3",
+        "riotIdTagline": "TST1",
+        "participantId": 8,
+        "teamId": 200,
+        "win": false,
+        "championName": "Nami",
+        "kills": 2,
+        "deaths": 6,
+        "assists": 5,
+        "totalDamageDealtToChampions": 9000,
+        "totalDamageTaken": 7000,
+        "timeCCingOthers": 12,
+        "totalHealsOnTeammates": 1100,
+        "totalDamageShieldedOnTeammates": 400
+      },
+      {
+        "puuid": "player-x4",
+        "riotIdGameName": "PlayerX4",
+        "riotIdTagline": "TST1",
+        "participantId": 9,
+        "teamId": 200,
+        "win": false,
+        "championName": "Sett",
+        "kills": 3,
+        "deaths": 4,
+        "assists": 4,
+        "totalDamageDealtToChampions": 13000,
+        "totalDamageTaken": 16000,
+        "timeCCingOthers": 16,
+        "totalHealsOnTeammates": 0,
+        "totalDamageShieldedOnTeammates": 0
+      },
+      {
+        "puuid": "player-x5",
+        "riotIdGameName": "PlayerX5",
+        "riotIdTagline": "TST1",
+        "participantId": 10,
+        "teamId": 200,
+        "win": false,
+        "championName": "Sona",
+        "kills": 1,
+        "deaths": 5,
+        "assists": 6,
+        "totalDamageDealtToChampions": 8000,
+        "totalDamageTaken": 6000,
+        "timeCCingOthers": 6,
+        "totalHealsOnTeammates": 1800,
+        "totalDamageShieldedOnTeammates": 900
+      }
+    ],
+    "match": {
+      "matchId": "431945471"
+    },
+    "timeline": {
+      "frames": [
+        {
+          "timestamp": 60000,
+          "participantFrames": {
+            "1": { "totalGold": 2500 },
+            "2": { "totalGold": 2400 },
+            "3": { "totalGold": 2300 },
+            "4": { "totalGold": 2200 },
+            "5": { "totalGold": 2350 },
+            "6": { "totalGold": 2100 },
+            "7": { "totalGold": 2050 },
+            "8": { "totalGold": 2000 },
+            "9": { "totalGold": 2150 },
+            "10": { "totalGold": 1980 }
+          }
+        },
+        {
+          "timestamp": 120000,
+          "participantFrames": {
+            "1": { "totalGold": 4800 },
+            "2": { "totalGold": 4550 },
+            "3": { "totalGold": 4300 },
+            "4": { "totalGold": 4100 },
+            "5": { "totalGold": 4400 },
+            "6": { "totalGold": 3900 },
+            "7": { "totalGold": 3850 },
+            "8": { "totalGold": 3700 },
+            "9": { "totalGold": 4000 },
+            "10": { "totalGold": 3600 }
+          }
+        }
+      ],
+      "events": [
+        {
+          "type": "CHAMPION_KILL",
+          "timestamp": 61000,
+          "killerId": 1,
+          "victimId": 6,
+          "participantId": null,
+          "assistingParticipantIds": [2, 3],
+          "buildingType": null
+        },
+        {
+          "type": "BUILDING_KILL",
+          "timestamp": 121000,
+          "killerId": null,
+          "victimId": null,
+          "participantId": 4,
+          "assistingParticipantIds": [],
+          "buildingType": "OUTER_TURRET"
+        }
+      ]
+    }
+  }
+}
