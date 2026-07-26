@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using LoLCompanion.Core.Contracts;
 using LoLCompanion.Core.Lcu;
 
@@ -90,7 +91,12 @@ public sealed class CompanionAnalysisNormalizer
 
     public byte[] SerializeRequest(CompanionAnalysisSubmitRequest request)
     {
-        var bytes = JsonSerializer.SerializeToUtf8Bytes(request, JsonOptions);
+        var requestJsonOptions = new JsonSerializerOptions(JsonOptions)
+        {
+            DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        };
+
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(request, requestJsonOptions);
         if (bytes.Length > CompanionAnalysisContract.MaxRequestBytes)
         {
             throw new CompanionAnalysisException("payload_too_large", "Companion analysis payload exceeds the upload limit.");
@@ -173,10 +179,17 @@ public sealed class CompanionAnalysisNormalizer
         {
             ValidateRequiredString(eventDto.Type, $"timeline.events[{index}].type");
             ValidateBoundedLong(eventDto.Timestamp, 0, MaxTimelineTimestamp, $"timeline.events[{index}].timestamp");
-            ValidateOptionalBoundedInt(eventDto.KillerId, 1, MaxParticipantId, $"timeline.events[{index}].killerId");
-            ValidateOptionalBoundedInt(eventDto.VictimId, 1, MaxParticipantId, $"timeline.events[{index}].victimId");
-            ValidateOptionalBoundedInt(eventDto.ParticipantId, 1, MaxParticipantId, $"timeline.events[{index}].participantId");
-            foreach (var assist in eventDto.AssistingParticipantIds)
+            var killerId = NormalizeOptionalParticipantId(eventDto.KillerId);
+            var victimId = NormalizeOptionalParticipantId(eventDto.VictimId);
+            var participantId = NormalizeOptionalParticipantId(eventDto.ParticipantId);
+            var assistingParticipantIds = eventDto.AssistingParticipantIds
+                .Select(value => NormalizeOptionalParticipantId(value))
+                .Where(value => value.HasValue)
+                .Select(value => value!.Value)
+                .Distinct()
+                .ToArray();
+
+            foreach (var assist in assistingParticipantIds)
             {
                 ValidateBoundedInt(assist, 1, MaxParticipantId, $"timeline.events[{index}].assistingParticipantIds");
             }
@@ -184,10 +197,10 @@ public sealed class CompanionAnalysisNormalizer
             return new CompanionAnalysisTimelineEventV1(
                 eventDto.Type,
                 eventDto.Timestamp,
-                eventDto.KillerId,
-                eventDto.VictimId,
-                eventDto.ParticipantId,
-                eventDto.AssistingParticipantIds.ToArray(),
+                killerId,
+                victimId,
+                participantId,
+                assistingParticipantIds,
                 string.IsNullOrWhiteSpace(eventDto.BuildingType) ? null : eventDto.BuildingType
             );
         }).ToArray();
@@ -210,6 +223,9 @@ public sealed class CompanionAnalysisNormalizer
             throw new CompanionAnalysisException("payload_invalid", $"{label} is outside the supported range.");
         }
     }
+
+    private static int? NormalizeOptionalParticipantId(int? value) =>
+        value.HasValue && value.Value is >= 1 and <= 10 ? value : null;
 
     private static void ValidateOptionalBoundedInt(int? value, int minimum, int maximum, string label)
     {

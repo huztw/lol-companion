@@ -10,11 +10,19 @@ using LoLCompanion.Core.Lcu;
 await TestLockfileParserAsync();
 await TestDiscoveryAsync();
 await TestLoopbackAndAuthAsync();
+await TestCurrentSummonerDisplayNameFallbackAsync();
 await TestRecentMatchMappingAsync();
+await TestNestedRecentMatchMappingAsync();
 await TestDetailAndTimelineAsync();
+await TestNestedDetailMappingAsync();
+await TestChampionSummaryResolutionAsync();
+await TestChampionSummaryFallbackAsync();
+await TestFlatDetailCompatibilityAsync();
+await TestDetailSchemaFailureAsync();
 await TestStaleRefreshAsync();
 await TestCancellationAsync();
 await TestTransportFailureClassificationAsync();
+await TestSharingLockedLockfileAsync();
 await TestCompanionAnalysisNormalizerAsync();
 await TestCompanionSessionManagerAsync();
 await TestCompanionApiClientAsync();
@@ -118,6 +126,71 @@ static Task TestLoopbackAndAuthAsync()
     return Task.CompletedTask;
 }
 
+static async Task TestCurrentSummonerDisplayNameFallbackAsync()
+{
+    var defaultAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                if (request.RequestUri?.AbsolutePath.Contains("current-summoner", StringComparison.Ordinal) == true)
+                {
+                    return Json("""{"summonerId":1001,"accountId":2002,"displayName":"Tester","gameName":"AltTester","tagLine":"#1234","puuid":"puuid-1"}""");
+                }
+
+                return Json("""{"games":{"games":[]}}""");
+            })
+        ]);
+
+    var defaultSummoner = await defaultAdapter.GetCurrentSummonerAsync();
+    Assert(defaultSummoner.DisplayName == "Tester", "Expected non-empty displayName to win over gameName.");
+
+    var fallbackAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                if (request.RequestUri?.AbsolutePath.Contains("current-summoner", StringComparison.Ordinal) == true)
+                {
+                    return Json("""{"summonerId":1001,"accountId":2002,"displayName":"","gameName":"AltTester","tagLine":"#1234","puuid":"puuid-1"}""");
+                }
+
+                return Json("""{"games":{"games":[]}}""");
+            })
+        ]);
+
+    var fallbackSummoner = await fallbackAdapter.GetCurrentSummonerAsync();
+    Assert(fallbackSummoner.DisplayName == "AltTester", "Expected gameName to fill empty displayName.");
+
+    var failingAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                if (request.RequestUri?.AbsolutePath.Contains("current-summoner", StringComparison.Ordinal) == true)
+                {
+                    return Json("""{"summonerId":1001,"accountId":2002,"displayName":"","gameName":"","tagLine":"#1234","puuid":"puuid-1"}""");
+                }
+
+                return Json("""{"games":{"games":[]}}""");
+            })
+        ]);
+
+    await AssertThrowsAsync<LcuException>(() => failingAdapter.GetCurrentSummonerAsync(), "Expected empty names to fail.");
+}
+
 static async Task TestRecentMatchMappingAsync()
 {
     var adapter = CreateAdapter(
@@ -178,6 +251,251 @@ static async Task TestRecentMatchMappingAsync()
     Assert(matches[0].Kills == 8, "Expected the selected player to be the current summoner, not another participant.");
     Assert(!matches[1].IsSupported, "Expected queue 400 to be unsupported.");
     Assert(matches[1].UnsupportedReason == "analysis_not_supported_for_queue", "Expected unsupported reason.");
+}
+
+static async Task TestNestedRecentMatchMappingAsync()
+{
+    var adapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                if (request.RequestUri?.AbsolutePath.Contains("current-summoner", StringComparison.Ordinal) == true)
+                {
+                    return Json("""{"summonerId":1001,"accountId":2002,"displayName":"Tester","puuid":"puuid-1"}""");
+                }
+
+                return Json("""
+                {
+                  "games": {
+                    "games": [
+                      {
+                        "gameId": 21,
+                        "queueId": 2400,
+                        "gameMode": "ARAM",
+                        "gameType": "MATCHED",
+                        "gameCreation": 1721892000000,
+                        "gameDuration": 1300,
+                        "participantIdentities": [
+                          { "participantId": 1, "player": { "puuid": "other-puuid", "summonerId": 9999, "accountId": 8888 } },
+                          { "participantId": 2, "player": { "puuid": "puuid-1", "summonerId": 1001, "accountId": 2002 } }
+                        ],
+                        "participants": [
+                          { "participantId": 1, "championId": 99, "stats": { "win": false, "kills": 0, "deaths": 10, "assists": 1 } },
+                          { "participantId": 2, "championId": 1, "championName": "Annie", "stats": { "win": true, "kills": 8, "deaths": 2, "assists": 11 } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """);
+            })
+        ]);
+
+    var matches = await adapter.GetRecentMatchesAsync();
+    Assert(matches.Count == 1, "Expected one mapped nested recent match.");
+    Assert(matches[0].Win, "Expected nested participant identity to select current player.");
+    Assert(matches[0].Kills == 8 && matches[0].Deaths == 2 && matches[0].Assists == 11, "Expected stats to come from participant.stats.");
+    Assert(matches[0].ChampionId == 1, "Expected champion id from nested participant.");
+    Assert(matches[0].ChampionName == "Annie", "Expected champion name to round-trip when present.");
+}
+
+static async Task TestChampionSummaryResolutionAsync()
+{
+    var fixture = LoadAnalysisFixture();
+    var summaryCalls = 0;
+    var championSummaryJson = JsonSerializer.Serialize(new[]
+    {
+        new { id = 1, name = "Annie" },
+        new { id = 2, name = "Lux" },
+        new { id = 3, name = "Leona" },
+        new { id = 4, name = "Braum" },
+        new { id = 5, name = "Seraphine" },
+        new { id = 6, name = "Ahri" },
+        new { id = 7, name = "Ezreal" },
+        new { id = 8, name = "Nami" },
+        new { id = 9, name = "Sett" },
+        new { id = 10, name = "Sona" }
+    });
+
+    var participantIdentities = fixture.Participants.Select(participant => new
+    {
+        participantId = participant.ParticipantId,
+        player = new
+        {
+            puuid = participant.Puuid,
+            gameName = participant.RiotIdGameName,
+            tagLine = participant.RiotIdTagline
+        }
+    }).ToArray();
+
+    var nestedParticipants = fixture.Participants.Select(participant => new
+    {
+        participantId = participant.ParticipantId,
+        teamId = participant.TeamId,
+        championId = participant.ParticipantId,
+        stats = new
+        {
+            win = participant.Win,
+            kills = participant.Kills,
+            deaths = participant.Deaths,
+            assists = participant.Assists,
+            totalDamageDealtToChampions = participant.TotalDamageDealtToChampions,
+            totalDamageTaken = participant.TotalDamageTaken,
+            timeCCingOthers = participant.TimeCCingOthers
+        }
+    }).ToArray();
+
+    var adapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (path.Contains("champion-summary.json", StringComparison.Ordinal))
+                {
+                    summaryCalls++;
+                    return Json(championSummaryJson);
+                }
+
+                if (path.Contains("current-summoner", StringComparison.Ordinal))
+                {
+                    return Json("""{"summonerId":123456789,"accountId":987654321,"displayName":"PlayerA","puuid":"player-a"}""");
+                }
+
+                if (path.Contains("/games/431945471", StringComparison.Ordinal))
+                {
+                    return Json(JsonSerializer.Serialize(new
+                    {
+                        gameId = 431945471,
+                        queueId = 450,
+                        gameMode = "ARAM",
+                        gameType = "MATCHED",
+                        gameCreation = 1721892000000,
+                        gameDuration = 1600,
+                        participantIdentities,
+                        participants = nestedParticipants
+                    }));
+                }
+
+                return Json(JsonSerializer.Serialize(new
+                {
+                    games = new
+                    {
+                        games = new[]
+                        {
+                            new
+                            {
+                                gameId = 431945471,
+                                queueId = 450,
+                                gameMode = "ARAM",
+                                gameType = "MATCHED",
+                                gameCreation = 1721892000000,
+                                gameDuration = 1600,
+                                participantIdentities,
+                                participants = nestedParticipants
+                            }
+                        }
+                    }
+                }));
+            })
+        ]);
+
+    var matches = await adapter.GetRecentMatchesAsync();
+    var detail = await adapter.GetMatchDetailAsync(431945471);
+    var normalized = new CompanionAnalysisNormalizer().Normalize(
+        new LcuCurrentSummoner(123456789, 987654321, "PlayerA", fixture.RequestedParticipantPuuid),
+        matches[0],
+        detail,
+        LcuTimelineResult.Unavailable("timeline_unavailable"));
+
+    Assert(summaryCalls == 1, "Expected champion summary to be fetched only once per adapter.");
+    Assert(matches[0].ChampionName == "Annie", "Expected recent champion name to resolve from summary cache.");
+    Assert(detail.Participants[0].ChampionName == "Annie", "Expected detail champion name to resolve from summary cache.");
+    Assert(normalized.Participants.Count == 10, "Expected nested detail payload to normalize successfully.");
+    Assert(normalized.Participants[0].ChampionName == "Annie", "Expected normalized payload to preserve resolved champion names.");
+}
+
+static async Task TestChampionSummaryFallbackAsync()
+{
+    var adapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (path.Contains("champion-summary.json", StringComparison.Ordinal))
+                {
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
+
+                if (path.Contains("current-summoner", StringComparison.Ordinal))
+                {
+                    return Json("""{"summonerId":123456789,"accountId":987654321,"displayName":"PlayerA","puuid":"player-a"}""");
+                }
+
+                if (path.Contains("/games/431945472", StringComparison.Ordinal))
+                {
+                    return Json("""
+                    {
+                      "gameId": 431945472,
+                      "queueId": 450,
+                      "gameMode": "ARAM",
+                      "gameType": "MATCHED",
+                      "gameCreation": 1721892000000,
+                      "gameDuration": 1600,
+                      "participantIdentities": [
+                        { "participantId": 1, "player": { "puuid": "player-a", "gameName": "PlayerA", "tagLine": "TST1" } }
+                      ],
+                      "participants": [
+                        { "participantId": 1, "teamId": 100, "championId": 1, "stats": { "win": true, "kills": 8, "deaths": 2, "assists": 10 } }
+                      ]
+                    }
+                    """);
+                }
+
+                return Json("""
+                {
+                  "games": {
+                    "games": [
+                      {
+                        "gameId": 431945472,
+                        "queueId": 450,
+                        "gameMode": "ARAM",
+                        "gameType": "MATCHED",
+                        "gameCreation": 1721892000000,
+                        "gameDuration": 1600,
+                        "participantIdentities": [
+                          { "participantId": 1, "player": { "puuid": "player-a", "gameName": "PlayerA", "tagLine": "TST1" } }
+                        ],
+                        "participants": [
+                          { "participantId": 1, "teamId": 100, "championId": 1, "stats": { "win": true, "kills": 8, "deaths": 2, "assists": 10 } }
+                        ]
+                      }
+                    ]
+                  }
+                }
+                """);
+            })
+        ]);
+
+    var matches = await adapter.GetRecentMatchesAsync();
+    var detail = await adapter.GetMatchDetailAsync(431945472);
+
+    Assert(matches[0].ChampionName is null, "Expected recent champion name to remain nullable when summary is unavailable.");
+    Assert(detail.Participants[0].ChampionName == "Champion #1", "Expected detail champion name to fall back to a stable label.");
 }
 
 static async Task TestDetailAndTimelineAsync()
@@ -241,6 +559,15 @@ static async Task TestDetailAndTimelineAsync()
                           "killerId": 1,
                           "victimId": 6,
                           "assistingParticipantIds": [2, 3]
+                        },
+                        {
+                          "type": "BUILDING_KILL",
+                          "timestamp": 62000,
+                          "killerId": 0,
+                          "victimId": 11,
+                          "participantId": -1,
+                          "assistingParticipantIds": [0, 2, 2, 3, 11],
+                          "buildingType": "OUTER_TURRET"
                         }
                       ]
                     }
@@ -252,12 +579,21 @@ static async Task TestDetailAndTimelineAsync()
 
     var detail = await adapter.GetMatchDetailAsync(431945471);
     Assert(detail.QueueId == 2400, "Expected detailed queue id.");
-    Assert(requests.Count == 1 && requests[0]?.AbsolutePath.EndsWith("/games/431945471", StringComparison.Ordinal) == true, "Detail should be fetched on demand only.");
+    var detailRequests = requests.Count(request => request?.AbsolutePath.EndsWith("/games/431945471", StringComparison.Ordinal) == true);
+    var summaryRequests = requests.Count(request => request?.AbsolutePath.Contains("champion-summary.json", StringComparison.Ordinal) == true);
+    var timelineRequestsBeforeCall = requests.Count(request => request?.AbsolutePath.Contains("/game-timelines/", StringComparison.Ordinal) == true);
+    Assert(summaryRequests == 1, "Expected champion summary to be fetched once for detail mapping.");
+    Assert(detailRequests == 1, "Detail should be fetched on demand only.");
+    Assert(timelineRequestsBeforeCall == 0, "Timeline should not be requested before GetTimelineAsync is called.");
 
     var timeline = await adapter.GetTimelineAsync(431945471);
     Assert(timeline.IsAvailable, "Expected frame-based timeline to parse successfully.");
     Assert(timeline.Timeline?.Frames.Count == 1, "Expected timeline frame parsing.");
-    Assert(timeline.Timeline?.Events.Count == 1, "Expected timeline events to come from frames[].events.");
+    Assert(timeline.Timeline?.Events.Count == 2, "Expected timeline events to come from frames[].events.");
+    Assert(timeline.Timeline?.Events[1].KillerId is null, "Expected out-of-range killer id to become null.");
+    Assert(timeline.Timeline?.Events[1].VictimId is null, "Expected out-of-range victim id to become null.");
+    Assert(timeline.Timeline?.Events[1].ParticipantId is null, "Expected out-of-range participant id to become null.");
+    Assert(timeline.Timeline?.Events[1].AssistingParticipantIds.SequenceEqual([2, 3]) == true, "Expected assists to be filtered and deduplicated.");
 
     var unavailableAdapter = CreateAdapter(
         discoveries:
@@ -286,6 +622,270 @@ static async Task TestDetailAndTimelineAsync()
     var invalidTimeline = await invalidTimelineAdapter.GetTimelineAsync(431945471);
     Assert(!invalidTimeline.IsAvailable, "Expected invalid timeline schema to become unavailable result.");
     Assert(invalidTimeline.UnavailableReason == "timeline_schema_invalid", "Expected schema unavailable reason.");
+}
+
+static async Task TestNestedDetailMappingAsync()
+{
+    var adapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (!path.Contains("/games/431945471", StringComparison.Ordinal))
+                {
+                    return Json("""{"frames": []}""");
+                }
+
+                return Json("""
+                {
+                  "gameId": 431945471,
+                  "queueId": 450,
+                  "gameMode": "ARAM",
+                  "gameType": "MATCHED",
+                  "gameCreation": 1721892000000,
+                  "gameDuration": 1600,
+                  "participantIdentities": [
+                    { "participantId": 1, "player": { "puuid": "puuid-1", "gameName": "PlayerA", "tagLine": "TST1" } },
+                    { "participantId": 2, "player": { "puuid": "puuid-2", "gameName": "PlayerB", "tagLine": "TST1" } }
+                  ],
+                  "participants": [
+                    {
+                      "participantId": 1,
+                      "teamId": 100,
+                      "championId": 1,
+                      "stats": {
+                        "win": true,
+                        "kills": 8,
+                        "deaths": 3,
+                        "assists": 10,
+                        "totalDamageDealtToChampions": 25000,
+                        "totalDamageTaken": 14000,
+                        "timeCCingOthers": 30
+                      }
+                    },
+                    {
+                      "participantId": 2,
+                      "teamId": 200,
+                      "championId": 99,
+                      "stats": {
+                        "win": false,
+                        "kills": 2,
+                        "deaths": 7,
+                        "assists": 5,
+                        "totalDamageDealtToChampions": 12000,
+                        "totalDamageTaken": 9000,
+                        "timeCCingOthers": 18
+                      }
+                    }
+                  ]
+                }
+                """);
+            })
+        ]);
+
+    var detail = await adapter.GetMatchDetailAsync(431945471);
+    Assert(detail.Participants.Count == 2, "Expected nested legacy detail participants.");
+    Assert(detail.Participants[0].Puuid == "puuid-1", "Expected puuid from participant identity player.");
+    Assert(detail.Participants[0].RiotIdGameName == "PlayerA", "Expected gameName fallback from participant identity player.");
+    Assert(detail.Participants[0].RiotIdTagline == "TST1", "Expected tagLine from participant identity player.");
+    Assert(detail.Participants[0].ChampionName == "Champion #1", "Expected missing championName to use the stable fallback label.");
+    Assert(detail.Participants[0].TotalHealsOnTeammates is null, "Expected missing heal metric to remain null.");
+    Assert(detail.Participants[0].TotalDamageShieldedOnTeammates is null, "Expected missing shield metric to remain null.");
+}
+
+static async Task TestFlatDetailCompatibilityAsync()
+{
+    var adapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (!path.Contains("/games/987654321", StringComparison.Ordinal))
+                {
+                    return Json("""{"frames": []}""");
+                }
+
+                return Json("""
+                {
+                  "gameId": 987654321,
+                  "queueId": 2400,
+                  "gameMode": "ARAM",
+                  "gameType": "MATCHED",
+                  "gameCreation": 1721892000000,
+                  "gameDuration": 1500,
+                  "participants": [
+                    {
+                      "puuid": "puuid-flat-1",
+                      "riotIdGameName": "FlatPlayer",
+                      "riotIdTagline": "TAG",
+                      "participantId": 1,
+                      "teamId": 100,
+                      "win": true,
+                      "championId": 1,
+                      "championName": "Annie",
+                      "kills": 7,
+                      "deaths": 1,
+                      "assists": 9,
+                      "totalDamageDealtToChampions": 22000,
+                      "totalDamageTaken": 9000,
+                      "timeCCingOthers": 22,
+                      "totalHealsOnTeammates": 300,
+                      "totalDamageShieldedOnTeammates": 120
+                    }
+                  ]
+                }
+                """);
+            })
+        ]);
+
+    var detail = await adapter.GetMatchDetailAsync(987654321);
+    Assert(detail.Participants.Count == 1, "Expected flat schema compatibility.");
+    Assert(detail.Participants[0].Puuid == "puuid-flat-1", "Expected flat puuid to round-trip.");
+    Assert(detail.Participants[0].ChampionName == "Annie", "Expected flat champion name to keep explicit schema priority.");
+    Assert(detail.Participants[0].TotalHealsOnTeammates == 300, "Expected flat heal metric to round-trip.");
+    Assert(detail.Participants[0].TotalDamageShieldedOnTeammates == 120, "Expected flat shield metric to round-trip.");
+}
+
+static async Task TestDetailSchemaFailureAsync()
+{
+    var missingParticipantAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (!path.Contains("/games/111111111", StringComparison.Ordinal))
+                {
+                    return Json("""{"frames": []}""");
+                }
+
+                return Json("""
+                {
+                  "gameId": 111111111,
+                  "queueId": 450,
+                  "gameMode": "ARAM",
+                  "gameType": "MATCHED",
+                  "gameCreation": 1721892000000,
+                  "gameDuration": 1600,
+                  "participantIdentities": [
+                    { "participantId": 1, "player": { "puuid": "puuid-1", "gameName": "PlayerA", "tagLine": "TST1" } }
+                  ],
+                  "participants": [
+                    {
+                      "participantId": 2,
+                      "teamId": 100,
+                      "championId": 1,
+                      "stats": { "win": true, "kills": 1, "deaths": 1, "assists": 1 }
+                    }
+                  ]
+                }
+                """);
+            })
+        ]);
+
+    await AssertThrowsAsync<LcuException>(() => missingParticipantAdapter.GetMatchDetailAsync(111111111), "Expected missing participant mapping to fail safely.");
+
+    var duplicateParticipantAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (!path.Contains("/games/222222222", StringComparison.Ordinal))
+                {
+                    return Json("""{"frames": []}""");
+                }
+
+                return Json("""
+                {
+                  "gameId": 222222222,
+                  "queueId": 450,
+                  "gameMode": "ARAM",
+                  "gameType": "MATCHED",
+                  "gameCreation": 1721892000000,
+                  "gameDuration": 1600,
+                  "participantIdentities": [
+                    { "participantId": 1, "player": { "puuid": "puuid-1", "gameName": "PlayerA", "tagLine": "TST1" } }
+                  ],
+                  "participants": [
+                    {
+                      "participantId": 1,
+                      "teamId": 100,
+                      "championId": 1,
+                      "stats": { "win": true, "kills": 1, "deaths": 1, "assists": 1 }
+                    },
+                    {
+                      "participantId": 1,
+                      "teamId": 100,
+                      "championId": 2,
+                      "stats": { "win": true, "kills": 2, "deaths": 2, "assists": 2 }
+                    }
+                  ]
+                }
+                """);
+            })
+        ]);
+
+    await AssertThrowsAsync<LcuException>(() => duplicateParticipantAdapter.GetMatchDetailAsync(222222222), "Expected duplicate participant id to fail safely.");
+
+    var missingIdentityAdapter = CreateAdapter(
+        discoveries:
+        [
+            new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1234, "127.0.0.1", 2999, "https", "secret"), @"C:\League\lockfile", "found")
+        ],
+        handlers:
+        [
+            new RecordingHandler((request, _) =>
+            {
+                var path = request.RequestUri?.AbsolutePath ?? string.Empty;
+                if (!path.Contains("/games/333333333", StringComparison.Ordinal))
+                {
+                    return Json("""{"frames": []}""");
+                }
+
+                return Json("""
+                {
+                  "gameId": 333333333,
+                  "queueId": 450,
+                  "gameMode": "ARAM",
+                  "gameType": "MATCHED",
+                  "gameCreation": 1721892000000,
+                  "gameDuration": 1600,
+                  "participantIdentities": [
+                    { "participantId": 7, "player": { "puuid": "puuid-7", "gameName": "PlayerG", "tagLine": "TST1" } }
+                  ],
+                  "participants": [
+                    {
+                      "participantId": 1,
+                      "teamId": 100,
+                      "championId": 1,
+                      "stats": { "win": true, "kills": 1, "deaths": 1, "assists": 1 }
+                    }
+                  ]
+                }
+                """);
+            })
+        ]);
+
+    await AssertThrowsAsync<LcuException>(() => missingIdentityAdapter.GetMatchDetailAsync(333333333), "Expected missing identity mapping to fail safely.");
 }
 
 static async Task TestStaleRefreshAsync()
@@ -386,6 +986,45 @@ static async Task TestTransportFailureClassificationAsync()
     }
 }
 
+static async Task TestSharingLockedLockfileAsync()
+{
+    var tempDirectory = Path.Combine(Path.GetTempPath(), "lol-companion-core-tests", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(tempDirectory);
+
+    try
+    {
+        var lockfilePath = Path.Combine(tempDirectory, "lockfile");
+        var lockfileContent = "LeagueClientUx:1234:2999:super-secret:https";
+        await File.WriteAllTextAsync(lockfilePath, lockfileContent, Encoding.UTF8);
+
+        await using var sharingLock = new FileStream(
+            lockfilePath,
+            FileMode.Open,
+            FileAccess.ReadWrite,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+
+        var fileSystem = new SystemLcuFileSystem();
+        var readTask = fileSystem.ReadAllTextAsync(lockfilePath, CancellationToken.None);
+        Assert(await readTask == lockfileContent, "Expected lockfile to be readable while another sharing handle is open.");
+
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+        await AssertThrowsAsync<OperationCanceledException>(() => fileSystem.ReadAllTextAsync(lockfilePath, cts.Token), "Expected cancellation to flow from lockfile read.");
+    }
+    finally
+    {
+        try
+        {
+            Directory.Delete(tempDirectory, recursive: true);
+        }
+        catch
+        {
+        }
+    }
+}
+
 static async Task TestCompanionAnalysisNormalizerAsync()
 {
     var normalizer = new CompanionAnalysisNormalizer();
@@ -437,6 +1076,23 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(normalized.Timeline!.Frames.Count == 2, "Expected timeline frame bound to survive.");
     Assert(normalized.Timeline.Events.Count == 2, "Expected timeline event bound to survive.");
 
+    var timelineWithSystemIds = new LcuTimelineResult(
+        true,
+        new LcuTimelineDto(
+            [
+                new LcuTimelineFrameDto(60000, new Dictionary<int, double> { [1] = 2500 })
+            ],
+            [
+                new LcuTimelineEventDto("BUILDING_KILL", 61000, 0, 11, -1, [0, 2, 2, 3, 11], "OUTER_TURRET")
+            ]),
+        null);
+
+    var normalizedWithSystemIds = normalizer.Normalize(currentSummoner, selectedMatch, matchDetail, timelineWithSystemIds);
+    Assert(normalizedWithSystemIds.Timeline!.Events[0].KillerId is null, "Expected out-of-range killer id to normalize as null.");
+    Assert(normalizedWithSystemIds.Timeline.Events[0].VictimId is null, "Expected out-of-range victim id to normalize as null.");
+    Assert(normalizedWithSystemIds.Timeline.Events[0].ParticipantId is null, "Expected out-of-range participant id to normalize as null.");
+    Assert(normalizedWithSystemIds.Timeline.Events[0].AssistingParticipantIds.SequenceEqual([2, 3]) == true, "Expected invalid assists to be filtered and deduplicated.");
+
     var unavailable = normalizer.Normalize(
         currentSummoner,
         selectedMatch,
@@ -444,6 +1100,61 @@ static async Task TestCompanionAnalysisNormalizerAsync()
         new LcuTimelineResult(false, null, "timeline missing"));
     Assert(unavailable.Timeline is null, "Expected unavailable timeline to omit timeline payload.");
     Assert(unavailable.TimelineUnavailableReason == "timeline missing", "Expected unavailable reason to round-trip.");
+
+    var serializationMatchDetail = new LcuMatchDetailDto(
+        matchDetail.GameId,
+        matchDetail.QueueId,
+        matchDetail.GameMode,
+        matchDetail.GameType,
+        matchDetail.GameCreation,
+        matchDetail.GameDuration,
+        matchDetail.Participants.Select((participant, index) => index == 0
+            ? participant with
+            {
+                Win = false,
+                Kills = 0,
+                TimeCCingOthers = null,
+                TotalHealsOnTeammates = null,
+                TotalDamageShieldedOnTeammates = null
+            }
+            : participant).ToArray());
+
+    var serializationPayload = normalizer.Normalize(
+        currentSummoner,
+        selectedMatch,
+        serializationMatchDetail,
+        timeline);
+    var serializedRequest = new CompanionAnalysisSubmitRequest(
+        "request-1",
+        serializationMatchDetail.GameId,
+        CompanionAnalysisContract.SchemaVersion,
+        serializationMatchDetail.QueueId,
+        serializationPayload);
+    using var serializedDocument = JsonDocument.Parse(normalizer.SerializeRequest(serializedRequest));
+    var serializedRoot = serializedDocument.RootElement;
+    var serializedPayload = serializedRoot.GetProperty("payload");
+    Assert(!serializedPayload.TryGetProperty("timelineUnavailableReason", out _), "Expected timeline unavailable reason to be omitted when timeline is present.");
+    var serializedParticipants = serializedPayload.GetProperty("participants");
+    var firstParticipant = serializedParticipants[0];
+    Assert(firstParticipant.GetProperty("win").ValueKind is JsonValueKind.False, "Expected false to be preserved in payload.");
+    Assert(firstParticipant.GetProperty("kills").GetInt32() == 0, "Expected zero to be preserved in payload.");
+    Assert(!firstParticipant.TryGetProperty("timeCCingOthers", out _), "Expected null metric to be omitted.");
+    Assert(!firstParticipant.TryGetProperty("totalHealsOnTeammates", out _), "Expected null heal metric to be omitted.");
+    Assert(!firstParticipant.TryGetProperty("totalDamageShieldedOnTeammates", out _), "Expected null shield metric to be omitted.");
+
+    var unavailableRequest = new CompanionAnalysisSubmitRequest(
+        "request-2",
+        serializationMatchDetail.GameId,
+        CompanionAnalysisContract.SchemaVersion,
+        serializationMatchDetail.QueueId,
+        unavailable with
+        {
+            Timeline = null
+        });
+    using var unavailableDocument = JsonDocument.Parse(normalizer.SerializeRequest(unavailableRequest));
+    var unavailablePayload = unavailableDocument.RootElement.GetProperty("payload");
+    Assert(!unavailablePayload.TryGetProperty("timeline", out _), "Expected timeline to be omitted when unavailable.");
+    Assert(unavailablePayload.GetProperty("timelineUnavailableReason").GetString() == "timeline missing", "Expected unavailable reason to be present when timeline is missing.");
 
     await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(
         currentSummoner,

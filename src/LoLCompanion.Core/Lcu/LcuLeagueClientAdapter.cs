@@ -7,7 +7,10 @@ public sealed class LcuLeagueClientAdapter
 {
     private readonly ILcuLockfileDiscovery _discovery;
     private readonly LcuHttpClientFactory _clientFactory;
+    private readonly object _championNamesGate = new();
     private LcuCredential? _cachedCredential;
+    private IReadOnlyDictionary<int, string>? _championNames;
+    private Task<IReadOnlyDictionary<int, string>?>? _championNamesLoadTask;
 
     public LcuLeagueClientAdapter(ILcuLockfileDiscovery discovery, LcuHttpClientFactory clientFactory)
     {
@@ -24,17 +27,25 @@ public sealed class LcuLeagueClientAdapter
     {
         var summoner = await GetCurrentSummonerAsync(cancellationToken);
         return await ExecuteWithRefreshAsync(
-            (client, ct) => SendAndParseAsync(
-                client,
-                $"lol-match-history/v1/products/lol/{Uri.EscapeDataString(summoner.Puuid)}/matches?begIndex=0&endIndex=19",
-                json => ParseRecentMatches(json, summoner),
-                ct),
+            async (client, ct) =>
+            {
+                var championNames = await TryGetChampionNamesAsync(client, ct);
+                return await SendAndParseAsync(
+                    client,
+                    $"lol-match-history/v1/products/lol/{Uri.EscapeDataString(summoner.Puuid)}/matches?begIndex=0&endIndex=19",
+                    json => ParseRecentMatches(json, summoner, championNames),
+                    ct);
+            },
             cancellationToken);
     }
 
     public Task<LcuMatchDetailDto> GetMatchDetailAsync(long gameId, CancellationToken cancellationToken = default) =>
         ExecuteWithRefreshAsync(
-            (client, ct) => SendAndParseAsync(client, $"lol-match-history/v1/games/{gameId}", ParseMatchDetail, ct),
+            async (client, ct) =>
+            {
+                var championNames = await TryGetChampionNamesAsync(client, ct);
+                return await SendAndParseAsync(client, $"lol-match-history/v1/games/{gameId}", json => ParseMatchDetail(json, championNames), ct);
+            },
             cancellationToken);
 
     public Task<LcuTimelineResult> GetTimelineAsync(long gameId, CancellationToken cancellationToken = default) =>
@@ -173,82 +184,110 @@ public sealed class LcuLeagueClientAdapter
 
     private static LcuCurrentSummoner ParseCurrentSummoner(JsonElement root)
     {
+        var displayName = GetOptionalNonEmptyString(root, "displayName")
+            ?? GetOptionalNonEmptyString(root, "gameName");
+        if (displayName is null)
+        {
+            throw new LcuException("lcu_schema_invalid", "LCU response is missing displayName.", true);
+        }
+
         return new LcuCurrentSummoner(
             GetRequiredSafeInt64(root, "summonerId"),
             TryGetSafeInt64(root, "accountId"),
-            GetRequiredString(root, "displayName"),
+            displayName,
             GetRequiredString(root, "puuid"));
     }
 
-    private static IReadOnlyList<LcuRecentMatchSummary> ParseRecentMatches(JsonElement root, LcuCurrentSummoner summoner)
+    private static IReadOnlyList<LcuRecentMatchSummary> ParseRecentMatches(
+        JsonElement root,
+        LcuCurrentSummoner summoner,
+        IReadOnlyDictionary<int, string>? championNames)
     {
         var games = GetGamesArray(root);
         var results = new List<LcuRecentMatchSummary>();
 
         foreach (var game in games.EnumerateArray().Take(20))
         {
-            var participants = game.GetProperty("participants");
-            JsonElement player = default;
-            var found = false;
-
-            foreach (var participant in participants.EnumerateArray())
+            if (TryParseNestedRecentMatch(game, summoner, championNames, out var nestedSummary))
             {
-                if (MatchesCurrentSummoner(participant, summoner))
-                {
-                    player = participant;
-                    found = true;
-                    break;
-                }
+                results.Add(nestedSummary);
+                continue;
             }
 
-            if (!found)
+            if (TryParseFlatRecentMatch(game, summoner, championNames, out var flatSummary))
             {
-                throw new LcuException("lcu_schema_invalid", "Current summoner was not found in recent match participants.", true);
+                results.Add(flatSummary);
+                continue;
             }
 
-            var queueId = game.GetProperty("queueId").GetInt32();
-            results.Add(new LcuRecentMatchSummary(
-                GameId: game.GetProperty("gameId").GetInt64(),
-                QueueId: queueId,
-                GameMode: game.GetProperty("gameMode").GetString() ?? "UNKNOWN",
-                GameType: game.GetProperty("gameType").GetString() ?? "UNKNOWN",
-                CreatedAt: DateTimeOffset.FromUnixTimeMilliseconds(game.GetProperty("gameCreation").GetInt64()),
-                Duration: TimeSpan.FromSeconds(game.GetProperty("gameDuration").GetInt64()),
-                Win: player.GetProperty("win").GetBoolean(),
-                ChampionId: player.GetProperty("championId").GetInt32(),
-                ChampionName: player.TryGetProperty("championName", out var championName) ? championName.GetString() : null,
-                Kills: player.GetProperty("kills").GetInt32(),
-                Deaths: player.GetProperty("deaths").GetInt32(),
-                Assists: player.GetProperty("assists").GetInt32(),
-                IsSupported: queueId is 450 or 2400,
-                UnsupportedReason: queueId is 450 or 2400 ? null : "analysis_not_supported_for_queue"));
+            throw new LcuException("lcu_schema_invalid", "Current summoner was not found in recent match participants.", true);
         }
 
         return results;
     }
 
-    private static LcuMatchDetailDto ParseMatchDetail(JsonElement root)
+    private static LcuMatchDetailDto ParseMatchDetail(JsonElement root, IReadOnlyDictionary<int, string>? championNames)
     {
         var participants = new List<LcuMatchParticipantDto>();
-        foreach (var participant in root.GetProperty("participants").EnumerateArray())
+        var identities = GetParticipantIdentities(root);
+
+        if (identities is not null)
         {
-            participants.Add(new LcuMatchParticipantDto(
-                Puuid: GetRequiredString(participant, "puuid"),
-                RiotIdGameName: participant.TryGetProperty("riotIdGameName", out var gameName) ? gameName.GetString() : null,
-                RiotIdTagline: participant.TryGetProperty("riotIdTagline", out var tagLine) ? tagLine.GetString() : null,
-                ParticipantId: participant.GetProperty("participantId").GetInt32(),
-                TeamId: participant.GetProperty("teamId").GetInt32(),
-                Win: participant.GetProperty("win").GetBoolean(),
-                ChampionId: participant.GetProperty("championId").GetInt32(),
-                ChampionName: participant.TryGetProperty("championName", out var championName) ? championName.GetString() : null,
-                Kills: participant.GetProperty("kills").GetInt32(),
-                Deaths: participant.GetProperty("deaths").GetInt32(),
-                Assists: participant.GetProperty("assists").GetInt32(),
-                TotalDamageDealtToChampions: TryGetDouble(participant, "totalDamageDealtToChampions"),
-                TotalDamageTaken: TryGetDouble(participant, "totalDamageTaken"),
-                TimeCCingOthers: TryGetDouble(participant, "timeCCingOthers"),
-                TotalHealsOnTeammates: TryGetDouble(participant, "totalHealsOnTeammates"),
-                TotalDamageShieldedOnTeammates: TryGetDouble(participant, "totalDamageShieldedOnTeammates")));
+            var participantById = GetParticipantsById(root);
+            foreach (var identity in identities.Value.EnumerateArray())
+            {
+                var participantId = GetParticipantId(identity);
+                if (!participantId.HasValue || !participantById.TryGetValue(participantId.Value, out var participant))
+                {
+                    throw new LcuException("lcu_schema_invalid", "LCU response is missing participant mapping.", true);
+                }
+
+                var player = GetRequiredProperty(identity, "player", JsonValueKind.Object, "lcu_schema_invalid");
+                var stats = GetRequiredProperty(participant, "stats", JsonValueKind.Object, "lcu_schema_invalid");
+                var championId = GetRequiredInt32(participant, "championId");
+                participants.Add(new LcuMatchParticipantDto(
+                    Puuid: GetRequiredString(player, "puuid"),
+                    RiotIdGameName: GetOptionalNonEmptyString(player, "gameName") ?? GetOptionalNonEmptyString(player, "riotIdGameName"),
+                    RiotIdTagline: GetOptionalNonEmptyString(player, "tagLine") ?? GetOptionalNonEmptyString(player, "riotIdTagline"),
+                    ParticipantId: participantId.Value,
+                    TeamId: GetRequiredInt32(participant, "teamId"),
+                    Win: GetRequiredBool(stats, "win"),
+                    ChampionId: championId,
+                    ChampionName: ResolveChampionName(participant, championId, championNames, allowFallbackToLabel: true),
+                    Kills: GetRequiredInt32(stats, "kills"),
+                    Deaths: GetRequiredInt32(stats, "deaths"),
+                    Assists: GetRequiredInt32(stats, "assists"),
+                    TotalDamageDealtToChampions: TryGetDouble(stats, "totalDamageDealtToChampions"),
+                    TotalDamageTaken: TryGetDouble(stats, "totalDamageTaken"),
+                    TimeCCingOthers: TryGetDouble(stats, "timeCCingOthers"),
+                    TotalHealsOnTeammates: TryGetDouble(stats, "totalHealsOnTeammates"),
+                    TotalDamageShieldedOnTeammates: TryGetDouble(stats, "totalDamageShieldedOnTeammates")));
+            }
+        }
+        else
+        {
+            var participantElements = root.GetProperty("participants").EnumerateArray().ToArray();
+            foreach (var participant in participantElements)
+            {
+                var championId = participant.GetProperty("championId").GetInt32();
+                participants.Add(new LcuMatchParticipantDto(
+                    Puuid: GetRequiredString(participant, "puuid"),
+                    RiotIdGameName: participant.TryGetProperty("riotIdGameName", out var gameName) ? gameName.GetString() : null,
+                    RiotIdTagline: participant.TryGetProperty("riotIdTagline", out var tagLine) ? tagLine.GetString() : null,
+                    ParticipantId: participant.GetProperty("participantId").GetInt32(),
+                    TeamId: participant.GetProperty("teamId").GetInt32(),
+                    Win: participant.GetProperty("win").GetBoolean(),
+                    ChampionId: championId,
+                    ChampionName: ResolveChampionName(participant, championId, championNames, allowFallbackToLabel: true),
+                    Kills: participant.GetProperty("kills").GetInt32(),
+                    Deaths: participant.GetProperty("deaths").GetInt32(),
+                    Assists: participant.GetProperty("assists").GetInt32(),
+                    TotalDamageDealtToChampions: TryGetDouble(participant, "totalDamageDealtToChampions"),
+                    TotalDamageTaken: TryGetDouble(participant, "totalDamageTaken"),
+                    TimeCCingOthers: TryGetDouble(participant, "timeCCingOthers"),
+                    TotalHealsOnTeammates: TryGetDouble(participant, "totalHealsOnTeammates"),
+                    TotalDamageShieldedOnTeammates: TryGetDouble(participant, "totalDamageShieldedOnTeammates")));
+            }
         }
 
         return new LcuMatchDetailDto(
@@ -259,6 +298,47 @@ public sealed class LcuLeagueClientAdapter
             GameCreation: DateTimeOffset.FromUnixTimeMilliseconds(root.GetProperty("gameCreation").GetInt64()),
             GameDuration: TimeSpan.FromSeconds(root.GetProperty("gameDuration").GetInt64()),
             Participants: participants);
+    }
+
+    private static JsonElement? GetParticipantIdentities(JsonElement root) =>
+        root.TryGetProperty("participantIdentities", out var identities) && identities.ValueKind == JsonValueKind.Array
+            ? identities
+            : null;
+
+    private static Dictionary<int, JsonElement> GetParticipantsById(JsonElement root)
+    {
+        if (!root.TryGetProperty("participants", out var participants) || participants.ValueKind != JsonValueKind.Array)
+        {
+            throw new LcuException("lcu_schema_invalid", "LCU response is missing participants.", true);
+        }
+
+        var participantById = new Dictionary<int, JsonElement>();
+        foreach (var participant in participants.EnumerateArray())
+        {
+            var participantId = TryGetSafeInt32(participant, "participantId");
+            if (!participantId.HasValue)
+            {
+                throw new LcuException("lcu_schema_invalid", "LCU response is missing participantId.", true);
+            }
+
+            if (!participantById.TryAdd(participantId.Value, participant))
+            {
+                throw new LcuException("lcu_schema_invalid", "LCU response has duplicate participantId.", true);
+            }
+        }
+
+        return participantById;
+    }
+
+    private static int? GetParticipantId(JsonElement identity)
+    {
+        var participantId = TryGetSafeInt32(identity, "participantId");
+        if (participantId.HasValue)
+        {
+            return participantId;
+        }
+
+        return null;
     }
 
     private static LcuTimelineDto ParseTimeline(JsonElement root)
@@ -301,15 +381,20 @@ public sealed class LcuLeagueClientAdapter
     private static LcuTimelineEventDto ParseTimelineEvent(JsonElement eventElement)
     {
         var assists = eventElement.TryGetProperty("assistingParticipantIds", out var assisting) && assisting.ValueKind == JsonValueKind.Array
-            ? assisting.EnumerateArray().Where(value => value.TryGetInt32(out _)).Select(value => value.GetInt32()).ToArray()
+            ? assisting.EnumerateArray()
+                .Select(value => TryGetBoundedOptionalParticipantId(value))
+                .Where(value => value.HasValue)
+                .Select(value => value!.Value)
+                .Distinct()
+                .ToArray()
             : [];
 
         return new LcuTimelineEventDto(
             Type: eventElement.TryGetProperty("type", out var type) ? type.GetString() ?? "UNKNOWN" : "UNKNOWN",
             Timestamp: GetRequiredInt64(eventElement, "timestamp"),
-            KillerId: TryGetInt32(eventElement, "killerId"),
-            VictimId: TryGetInt32(eventElement, "victimId"),
-            ParticipantId: TryGetInt32(eventElement, "participantId"),
+            KillerId: TryGetBoundedOptionalParticipantId(eventElement, "killerId"),
+            VictimId: TryGetBoundedOptionalParticipantId(eventElement, "victimId"),
+            ParticipantId: TryGetBoundedOptionalParticipantId(eventElement, "participantId"),
             AssistingParticipantIds: assists,
             BuildingType: eventElement.TryGetProperty("buildingType", out var buildingType) ? buildingType.GetString() : null);
     }
@@ -355,6 +440,197 @@ public sealed class LcuLeagueClientAdapter
                participantAccountId.Value == summoner.AccountId.Value;
     }
 
+    private Task<IReadOnlyDictionary<int, string>?> TryGetChampionNamesAsync(HttpClient client, CancellationToken cancellationToken)
+    {
+        lock (_championNamesGate)
+        {
+            if (_championNames is not null)
+            {
+                return Task.FromResult<IReadOnlyDictionary<int, string>?>(_championNames);
+            }
+
+            if (_championNamesLoadTask is not null)
+            {
+                return _championNamesLoadTask;
+            }
+
+            _championNamesLoadTask = LoadChampionNamesAsync(client, cancellationToken);
+            return _championNamesLoadTask;
+        }
+    }
+
+    private async Task<IReadOnlyDictionary<int, string>?> LoadChampionNamesAsync(HttpClient client, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var response = await client.GetAsync("lol-game-data/assets/v1/champion-summary.json", cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return CacheChampionNames(Array.Empty<KeyValuePair<int, string>>());
+            }
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
+            if (document.RootElement.ValueKind != JsonValueKind.Array)
+            {
+                return CacheChampionNames(Array.Empty<KeyValuePair<int, string>>());
+            }
+
+            var names = new Dictionary<int, string>();
+            foreach (var champion in document.RootElement.EnumerateArray())
+            {
+                var championId = TryGetSafeInt32(champion, "id");
+                var championName = GetOptionalNonEmptyString(champion, "name");
+                if (championId.HasValue && championName is not null)
+                {
+                    names[championId.Value] = championName;
+                }
+            }
+
+            return CacheChampionNames(names);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return CacheChampionNames(Array.Empty<KeyValuePair<int, string>>());
+        }
+    }
+
+    private IReadOnlyDictionary<int, string>? CacheChampionNames(IEnumerable<KeyValuePair<int, string>> championNames)
+    {
+        lock (_championNamesGate)
+        {
+            _championNames = championNames.ToDictionary(pair => pair.Key, pair => pair.Value);
+            _championNamesLoadTask = null;
+            return _championNames;
+        }
+    }
+
+    private static bool TryParseNestedRecentMatch(JsonElement game, LcuCurrentSummoner summoner, IReadOnlyDictionary<int, string>? championNames, out LcuRecentMatchSummary summary)
+    {
+        summary = default!;
+
+        if (!game.TryGetProperty("participantIdentities", out var identities) || identities.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var participantId = FindCurrentParticipantId(identities, summoner);
+        if (!participantId.HasValue)
+        {
+            return false;
+        }
+
+        if (!game.TryGetProperty("participants", out var participants) || participants.ValueKind != JsonValueKind.Array)
+        {
+            throw new LcuException("lcu_schema_invalid", "LCU recent match participants are missing.", true);
+        }
+
+        foreach (var participant in participants.EnumerateArray())
+        {
+            if (TryGetSafeInt32(participant, "participantId") != participantId.Value)
+            {
+                continue;
+            }
+
+            var stats = GetRequiredProperty(participant, "stats", JsonValueKind.Object, "lcu_schema_invalid");
+            summary = CreateRecentMatchSummary(game, participant, stats, championNames, allowFallbackToLabel: false);
+            return true;
+        }
+
+        throw new LcuException("lcu_schema_invalid", "Current summoner was not found in recent match participants.", true);
+    }
+
+    private static bool TryParseFlatRecentMatch(JsonElement game, LcuCurrentSummoner summoner, IReadOnlyDictionary<int, string>? championNames, out LcuRecentMatchSummary summary)
+    {
+        summary = default!;
+
+        if (!game.TryGetProperty("participants", out var participants) || participants.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        foreach (var participant in participants.EnumerateArray())
+        {
+            if (!MatchesCurrentSummoner(participant, summoner))
+            {
+                continue;
+            }
+
+            summary = CreateRecentMatchSummary(game, participant, participant, championNames, allowFallbackToLabel: false);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static LcuRecentMatchSummary CreateRecentMatchSummary(
+        JsonElement game,
+        JsonElement participant,
+        JsonElement statsSource,
+        IReadOnlyDictionary<int, string>? championNames,
+        bool allowFallbackToLabel)
+    {
+        var queueId = game.GetProperty("queueId").GetInt32();
+        var championId = participant.GetProperty("championId").GetInt32();
+        return new LcuRecentMatchSummary(
+            GameId: game.GetProperty("gameId").GetInt64(),
+            QueueId: queueId,
+            GameMode: game.GetProperty("gameMode").GetString() ?? "UNKNOWN",
+            GameType: game.GetProperty("gameType").GetString() ?? "UNKNOWN",
+            CreatedAt: DateTimeOffset.FromUnixTimeMilliseconds(game.GetProperty("gameCreation").GetInt64()),
+            Duration: TimeSpan.FromSeconds(game.GetProperty("gameDuration").GetInt64()),
+            Win: GetRequiredBool(statsSource, "win"),
+            ChampionId: championId,
+            ChampionName: ResolveChampionName(participant, championId, championNames, allowFallbackToLabel),
+            Kills: GetRequiredInt32(statsSource, "kills"),
+            Deaths: GetRequiredInt32(statsSource, "deaths"),
+            Assists: GetRequiredInt32(statsSource, "assists"),
+            IsSupported: queueId is 450 or 2400,
+            UnsupportedReason: queueId is 450 or 2400 ? null : "analysis_not_supported_for_queue");
+    }
+
+    private static string? ResolveChampionName(
+        JsonElement participant,
+        int championId,
+        IReadOnlyDictionary<int, string>? championNames,
+        bool allowFallbackToLabel)
+    {
+        var explicitName = GetOptionalNonEmptyString(participant, "championName");
+        if (explicitName is not null)
+        {
+            return explicitName;
+        }
+
+        if (championNames is not null && championNames.TryGetValue(championId, out var resolvedName) && !string.IsNullOrWhiteSpace(resolvedName))
+        {
+            return resolvedName;
+        }
+
+        return allowFallbackToLabel ? $"Champion #{championId}" : null;
+    }
+
+    private static int? FindCurrentParticipantId(JsonElement identities, LcuCurrentSummoner summoner)
+    {
+        foreach (var identity in identities.EnumerateArray())
+        {
+            if (!identity.TryGetProperty("player", out var player) || player.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (MatchesCurrentSummoner(player, summoner))
+            {
+                return TryGetSafeInt32(identity, "participantId");
+            }
+        }
+
+        return null;
+    }
+
     private static JsonElement GetRequiredProperty(JsonElement element, string propertyName, JsonValueKind? expectedKind, string category)
     {
         if (!element.TryGetProperty(propertyName, out var property))
@@ -378,6 +654,17 @@ public sealed class LcuLeagueClientAdapter
         }
 
         return property.GetString()!;
+    }
+
+    private static string? GetOptionalNonEmptyString(JsonElement root, string propertyName)
+    {
+        if (!root.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        var value = property.GetString();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
     private static long GetRequiredSafeInt64(JsonElement root, string propertyName)
@@ -407,6 +694,70 @@ public sealed class LcuLeagueClientAdapter
         };
     }
 
+    private static int? TryGetSafeInt32(JsonElement element, string propertyName)
+    {
+        var value = TryGetSafeInt64(element, propertyName);
+        if (!value.HasValue || value.Value < int.MinValue || value.Value > int.MaxValue)
+        {
+            return null;
+        }
+
+        return (int)value.Value;
+    }
+
+    private static int? TryGetBoundedOptionalParticipantId(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property))
+        {
+            return null;
+        }
+
+        return TryGetBoundedOptionalParticipantId(property);
+    }
+
+    private static int? TryGetBoundedOptionalParticipantId(JsonElement value)
+    {
+        if (!value.TryGetInt32(out var participantId))
+        {
+            return null;
+        }
+
+        return participantId is < 1 or > 10 ? null : participantId;
+    }
+
+    private static bool GetRequiredBoolFromStats(JsonElement participant)
+    {
+        var stats = GetRequiredProperty(participant, "stats", JsonValueKind.Object, "lcu_schema_invalid");
+        if (!stats.TryGetProperty("win", out var win) || win.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new LcuException("lcu_schema_invalid", "LCU response is missing win.", true);
+        }
+
+        return win.GetBoolean();
+    }
+
+    private static int GetRequiredInt32FromStats(JsonElement participant, string propertyName)
+    {
+        var stats = GetRequiredProperty(participant, "stats", JsonValueKind.Object, "lcu_schema_invalid");
+        var value = TryGetSafeInt32(stats, propertyName);
+        if (!value.HasValue)
+        {
+            throw new LcuException("lcu_schema_invalid", $"LCU response is missing {propertyName}.", true);
+        }
+
+        return value.Value;
+    }
+
+    private static double? GetOptionalDoubleFromStats(JsonElement participant, string propertyName)
+    {
+        if (!participant.TryGetProperty("stats", out var stats) || stats.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return TryGetDouble(stats, propertyName);
+    }
+
     private static long GetRequiredInt64(JsonElement element, string propertyName)
     {
         if (!element.TryGetProperty(propertyName, out var property) || !property.TryGetInt64(out var value))
@@ -422,6 +773,27 @@ public sealed class LcuLeagueClientAdapter
 
     private static int? TryGetInt32(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value) ? value : null;
+
+    private static bool GetRequiredBool(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) || property.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+        {
+            throw new LcuException("lcu_schema_invalid", $"LCU response is missing {propertyName}.", true);
+        }
+
+        return property.GetBoolean();
+    }
+
+    private static int GetRequiredInt32(JsonElement element, string propertyName)
+    {
+        var value = TryGetSafeInt32(element, propertyName);
+        if (!value.HasValue)
+        {
+            throw new LcuException("lcu_schema_invalid", $"LCU response is missing {propertyName}.", true);
+        }
+
+        return value.Value;
+    }
 
     private static LcuException ClassifyTransportFailure(Exception exception, CancellationToken cancellationToken)
     {

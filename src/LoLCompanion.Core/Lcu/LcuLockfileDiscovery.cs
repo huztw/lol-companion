@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace LoLCompanion.Core.Lcu;
 
@@ -37,8 +38,21 @@ public sealed class SystemLcuFileSystem : ILcuFileSystem
 {
     public bool FileExists(string path) => File.Exists(path);
 
-    public Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken) =>
-        File.ReadAllTextAsync(path, cancellationToken);
+    public async Task<string> ReadAllTextAsync(string path, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+
+        await using var stream = new FileStream(
+            path,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete,
+            bufferSize: 4096,
+            options: FileOptions.Asynchronous | FileOptions.SequentialScan);
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+
+        return await reader.ReadToEndAsync(cancellationToken);
+    }
 }
 
 public sealed class LeagueClientProcessLocator : ILeagueProcessLocator
