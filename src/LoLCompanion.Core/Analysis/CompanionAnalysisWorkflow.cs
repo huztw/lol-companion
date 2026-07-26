@@ -89,6 +89,22 @@ public sealed class CompanionAnalysisWorkflow
             throw new CompanionAnalysisException("unsupported_queue", selectedMatch.UnsupportedReason ?? "Only supported ARAM queues can be analyzed.");
         }
 
+        events.Add(new CompanionAnalysisWorkflowEvent("started", "compatibility", 0));
+        var version = await _apiClient.GetVersionAsync(cancellationToken);
+        if (version.Analysis is null ||
+            version.Analysis.MinimumSchemaVersion > CompanionAnalysisContract.SchemaVersion ||
+            version.Analysis.CurrentSchemaVersion < CompanionAnalysisContract.SchemaVersion)
+        {
+            var downloadUrl = version.Current?.DownloadUrl;
+            throw new CompanionAnalysisException(
+                "analysis_schema_update_required",
+                string.IsNullOrWhiteSpace(downloadUrl)
+                    ? "A compatible LoL Companion version is required for timeline-v2 analysis."
+                    : $"A compatible LoL Companion version is required for timeline-v2 analysis. Download: {downloadUrl}",
+                false);
+        }
+
+        events.Add(new CompanionAnalysisWorkflowEvent("completed", "compatibility", 0));
         events.Add(new CompanionAnalysisWorkflowEvent("started", "current_summoner", 0));
         var currentSummoner = await _leagueSource.GetCurrentSummonerAsync(cancellationToken);
 

@@ -190,7 +190,7 @@ sealed class WorkflowHandler : HttpMessageHandler
         {
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"schemaVersion":1,"current":{"latestVersion":"1.2.3","downloadUrl":"https://downloads.example.test/lol-companion","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}""", Encoding.UTF8, "application/json")
+                Content = new StringContent("""{"schemaVersion":1,"current":{"latestVersion":"1.2.3","downloadUrl":"https://downloads.example.test/lol-companion","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"analysis":{"currentSchemaVersion":2,"minimumSchemaVersion":2}}""", Encoding.UTF8, "application/json")
             };
         }
 

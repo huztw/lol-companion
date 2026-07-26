@@ -344,9 +344,9 @@ static async Task TestChampionSummaryResolutionAsync()
             kills = participant.Kills,
             deaths = participant.Deaths,
             assists = participant.Assists,
-            totalDamageDealtToChampions = participant.TotalDamageDealtToChampions,
-            totalDamageTaken = participant.TotalDamageTaken,
-            timeCCingOthers = participant.TimeCCingOthers
+            totalDamageDealtToChampions = participant.TotalDamageDealtToChampions ?? 0,
+            totalDamageTaken = participant.TotalDamageTaken ?? 0,
+            timeCCingOthers = participant.TimeCCingOthers ?? 0
         }
     }).ToArray();
 
@@ -368,7 +368,7 @@ static async Task TestChampionSummaryResolutionAsync()
 
                 if (path.Contains("current-summoner", StringComparison.Ordinal))
                 {
-                    return Json("""{"summonerId":123456789,"accountId":987654321,"displayName":"PlayerA","puuid":"player-a"}""");
+                    return Json("""{"summonerId":123456789,"accountId":987654321,"displayName":"PlayerA","puuid":"player-1"}""");
                 }
 
                 if (path.Contains("/games/431945471", StringComparison.Ordinal))
@@ -1029,7 +1029,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
 {
     var normalizer = new CompanionAnalysisNormalizer();
     var fixture = LoadAnalysisFixture();
-    var currentSummoner = new LcuCurrentSummoner(123456789, 987654321, "PlayerA", "player-a");
+    var currentSummoner = new LcuCurrentSummoner(123456789, 987654321, "PlayerA", fixture.RequestedParticipantPuuid);
     var selectedMatch = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T10:00:00Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
     var matchDetail = new LcuMatchDetailDto(
         431945471,
@@ -1063,18 +1063,20 @@ static async Task TestCompanionAnalysisNormalizerAsync()
                 new LcuTimelineFrameDto(120000, new Dictionary<int, double> { [1] = 4800, [2] = 4550 })
             ],
             [
-                new LcuTimelineEventDto("CHAMPION_KILL", 61000, 1, 6, null, [2, 3], null),
-                new LcuTimelineEventDto("BUILDING_KILL", 121000, null, null, 4, [], "OUTER_TURRET")
+                new LcuTimelineEventDto("CHAMPION_KILL", 61000, 1, 6, null, [2, 3]),
+                new LcuTimelineEventDto("BUILDING_KILL", 121000, null, null, 4, [], TeamId: 100, BuildingType: "TOWER_BUILDING", TowerType: "OUTER_TURRET")
             ]),
         null);
 
     var normalized = normalizer.Normalize(currentSummoner, selectedMatch, matchDetail, timeline);
-    Assert(normalized.RequestedParticipantPuuid == "player-a", "Expected requested participant to be preserved.");
+    Assert(normalized.RequestedParticipantPuuid == fixture.RequestedParticipantPuuid, "Expected requested participant to be preserved.");
     Assert(normalized.Participants.Count == 10, "Expected exactly ten participants.");
     Assert(normalized.Participants.Count(participant => participant.TeamId == 100) == 5, "Expected exactly five teammates.");
     Assert(normalized.Timeline is not null, "Expected timeline to be present for available timeline.");
     Assert(normalized.Timeline!.Frames.Count == 2, "Expected timeline frame bound to survive.");
     Assert(normalized.Timeline.Events.Count == 2, "Expected timeline event bound to survive.");
+    Assert(normalized.Timeline.Events[1].TeamId == 100, "Expected building event team id to survive.");
+    Assert(normalized.Timeline.Events[1].TowerType == "OUTER_TURRET", "Expected tower subtype to survive.");
 
     var timelineWithSystemIds = new LcuTimelineResult(
         true,
@@ -1083,7 +1085,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
                 new LcuTimelineFrameDto(60000, new Dictionary<int, double> { [1] = 2500 })
             ],
             [
-                new LcuTimelineEventDto("BUILDING_KILL", 61000, 0, 11, -1, [0, 2, 2, 3, 11], "OUTER_TURRET")
+                new LcuTimelineEventDto("BUILDING_KILL", 61000, 0, 11, -1, [0, 2, 2, 3, 11], BuildingType: "TOWER_BUILDING", TowerType: "OUTER_TURRET")
             ]),
         null);
 
@@ -1092,6 +1094,15 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(normalizedWithSystemIds.Timeline.Events[0].VictimId is null, "Expected out-of-range victim id to normalize as null.");
     Assert(normalizedWithSystemIds.Timeline.Events[0].ParticipantId is null, "Expected out-of-range participant id to normalize as null.");
     Assert(normalizedWithSystemIds.Timeline.Events[0].AssistingParticipantIds.SequenceEqual([2, 3]) == true, "Expected invalid assists to be filtered and deduplicated.");
+
+    await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(
+        currentSummoner,
+        selectedMatch,
+        matchDetail,
+        new LcuTimelineResult(true, new LcuTimelineDto(
+            [new LcuTimelineFrameDto(60000, new Dictionary<int, double> { [1] = 2500 })],
+            [new LcuTimelineEventDto("BUILDING_KILL", 61000, null, null, 1, [], TeamId: 100, BuildingType: new string('x', 65))]), null))),
+        "Expected oversized timeline event label to fail.");
 
     var unavailable = normalizer.Normalize(
         currentSummoner,
@@ -1469,14 +1480,14 @@ static void Assert(bool condition, string message)
     }
 }
 
-static CompanionAnalysisPayloadV1 LoadAnalysisFixture()
+static CompanionAnalysisPayloadV2 LoadAnalysisFixture()
 {
-    var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "companion-analysis-request-v1.json");
+    var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "companion-analysis-request-v2.json");
     using var document = JsonDocument.Parse(File.ReadAllText(path));
     var payload = document.RootElement.GetProperty("payload");
-    return new CompanionAnalysisPayloadV1(
+    return new CompanionAnalysisPayloadV2(
         payload.GetProperty("requestedParticipantPuuid").GetString()!,
-        payload.GetProperty("participants").EnumerateArray().Select(participant => new CompanionAnalysisParticipantV1(
+        payload.GetProperty("participants").EnumerateArray().Select(participant => new CompanionAnalysisParticipantV2(
             participant.GetProperty("puuid").GetString()!,
             participant.GetProperty("riotIdGameName").GetString()!,
             participant.GetProperty("riotIdTagline").GetString()!,
@@ -1492,8 +1503,24 @@ static CompanionAnalysisPayloadV1 LoadAnalysisFixture()
             participant.TryGetProperty("timeCCingOthers", out var cc) ? cc.GetDouble() : null,
             participant.TryGetProperty("totalHealsOnTeammates", out var heal) ? heal.GetDouble() : null,
             participant.TryGetProperty("totalDamageShieldedOnTeammates", out var shield) ? shield.GetDouble() : null)).ToArray(),
-        new CompanionAnalysisMatchV1(payload.GetProperty("match").GetProperty("matchId").GetString()!),
-        null,
+        new CompanionAnalysisMatchV2(payload.GetProperty("match").GetProperty("matchId").GetString()!),
+        new CompanionAnalysisTimelineV2(
+            payload.GetProperty("timeline").GetProperty("frames").EnumerateArray().Select(frame => new CompanionAnalysisTimelineFrameV2(
+                frame.GetProperty("timestamp").GetInt64(),
+                frame.GetProperty("participantFrames").EnumerateObject().ToDictionary(
+                    property => property.Name,
+                    property => new CompanionAnalysisParticipantFrameV2(property.Value.GetProperty("totalGold").GetDouble())))).ToArray(),
+            payload.GetProperty("timeline").GetProperty("events").EnumerateArray().Select(@event => new CompanionAnalysisTimelineEventV2(
+                @event.GetProperty("type").GetString()!,
+                @event.GetProperty("timestamp").GetInt64(),
+                @event.TryGetProperty("killerId", out var killer) && killer.ValueKind != JsonValueKind.Null ? killer.GetInt32() : null,
+                @event.TryGetProperty("victimId", out var victim) && victim.ValueKind != JsonValueKind.Null ? victim.GetInt32() : null,
+                @event.TryGetProperty("participantId", out var participantId) && participantId.ValueKind != JsonValueKind.Null ? participantId.GetInt32() : null,
+                @event.GetProperty("assistingParticipantIds").EnumerateArray().Select(value => value.GetInt32()).ToArray(),
+                @event.TryGetProperty("teamId", out var teamId) && teamId.ValueKind != JsonValueKind.Null ? teamId.GetInt32() : null,
+                @event.TryGetProperty("buildingType", out var buildingType) && buildingType.ValueKind != JsonValueKind.Null ? buildingType.GetString() : null,
+                @event.TryGetProperty("towerType", out var towerType) && towerType.ValueKind != JsonValueKind.Null ? towerType.GetString() : null,
+                @event.TryGetProperty("laneType", out var laneType) && laneType.ValueKind != JsonValueKind.Null ? laneType.GetString() : null)).ToArray()),
         payload.TryGetProperty("timelineUnavailableReason", out var unavailableReason) ? unavailableReason.GetString() : null);
 }
 

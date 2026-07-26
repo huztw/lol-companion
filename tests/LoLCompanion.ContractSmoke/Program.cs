@@ -18,7 +18,7 @@ var submitBody = Encoding.UTF8.GetBytes("""
 {
   "requestId": "11111111-1111-4111-8111-111111111111",
   "gameId": 431945471,
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "queueId": 450,
   "payload": {
     "requestedParticipantPuuid": "player-a",
@@ -66,6 +66,8 @@ Assert(version.SchemaVersion == 1, "Expected version schema version.");
 Assert(version.Current.LatestVersion == "1.2.3", "Expected latest version.");
 Assert(version.Current.DownloadUrl == "https://example.com/Companion.zip", "Expected download url.");
 Assert(version.Current.Sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "Expected sha256 checksum.");
+Assert(version.Analysis?.CurrentSchemaVersion == 2, "Expected current analysis schema version.");
+Assert(version.Analysis?.MinimumSchemaVersion == 2, "Expected minimum analysis schema version.");
 
 Console.WriteLine("LoL Companion contract smoke passed.");
 
@@ -137,6 +139,10 @@ sealed class FakeHandler : HttpMessageHandler
                 "latestVersion": "1.2.3",
                 "downloadUrl": "https://example.com/Companion.zip",
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+              },
+              "analysis": {
+                "currentSchemaVersion": 2,
+                "minimumSchemaVersion": 2
               }
             }
             """;

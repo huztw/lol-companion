@@ -2,7 +2,7 @@ namespace LoLCompanion.Core.Contracts;
 
 public static class CompanionAnalysisContract
 {
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
     public const int MaxRequestBytes = 256 * 1024;
 }
 
@@ -11,7 +11,7 @@ public sealed record CompanionAnalysisSubmitRequest(
     long GameId,
     int SchemaVersion,
     int QueueId,
-    CompanionAnalysisPayloadV1 Payload
+    CompanionAnalysisPayloadV2 Payload
 );
 
 public sealed record CompanionAnalysisSubmitResponse(
@@ -19,15 +19,15 @@ public sealed record CompanionAnalysisSubmitResponse(
     bool Duplicate
 );
 
-public sealed record CompanionAnalysisPayloadV1(
+public sealed record CompanionAnalysisPayloadV2(
     string RequestedParticipantPuuid,
-    IReadOnlyList<CompanionAnalysisParticipantV1> Participants,
-    CompanionAnalysisMatchV1 Match,
-    CompanionAnalysisTimelineV1? Timeline,
+    IReadOnlyList<CompanionAnalysisParticipantV2> Participants,
+    CompanionAnalysisMatchV2 Match,
+    CompanionAnalysisTimelineV2? Timeline,
     string? TimelineUnavailableReason
 );
 
-public sealed record CompanionAnalysisParticipantV1(
+public sealed record CompanionAnalysisParticipantV2(
     string Puuid,
     string RiotIdGameName,
     string RiotIdTagline,
@@ -45,28 +45,31 @@ public sealed record CompanionAnalysisParticipantV1(
     double? TotalDamageShieldedOnTeammates
 );
 
-public sealed record CompanionAnalysisMatchV1(string MatchId);
+public sealed record CompanionAnalysisMatchV2(string MatchId);
 
-public sealed record CompanionAnalysisTimelineV1(
-    IReadOnlyList<CompanionAnalysisTimelineFrameV1> Frames,
-    IReadOnlyList<CompanionAnalysisTimelineEventV1> Events
+public sealed record CompanionAnalysisTimelineV2(
+    IReadOnlyList<CompanionAnalysisTimelineFrameV2> Frames,
+    IReadOnlyList<CompanionAnalysisTimelineEventV2> Events
 );
 
-public sealed record CompanionAnalysisTimelineFrameV1(
+public sealed record CompanionAnalysisTimelineFrameV2(
     long Timestamp,
-    IReadOnlyDictionary<string, CompanionAnalysisParticipantFrameV1> ParticipantFrames
+    IReadOnlyDictionary<string, CompanionAnalysisParticipantFrameV2> ParticipantFrames
 );
 
-public sealed record CompanionAnalysisParticipantFrameV1(double TotalGold);
+public sealed record CompanionAnalysisParticipantFrameV2(double TotalGold);
 
-public sealed record CompanionAnalysisTimelineEventV1(
+public sealed record CompanionAnalysisTimelineEventV2(
     string Type,
     long Timestamp,
     int? KillerId,
     int? VictimId,
     int? ParticipantId,
     IReadOnlyList<int> AssistingParticipantIds,
-    string? BuildingType
+    int? TeamId,
+    string? BuildingType,
+    string? TowerType,
+    string? LaneType
 );
 
 public sealed record CompanionAnalysisStatusDtoV1(
@@ -82,7 +85,13 @@ public sealed record CompanionAnalysisStatusDtoV1(
 
 public sealed record CompanionVersionDtoV1(
     int SchemaVersion,
-    CompanionDownloadContract Current
+    CompanionDownloadContract Current,
+    CompanionAnalysisCompatibilityContract? Analysis
+);
+
+public sealed record CompanionAnalysisCompatibilityContract(
+    int CurrentSchemaVersion,
+    int MinimumSchemaVersion
 );
 
 public sealed record CompanionDownloadContract(

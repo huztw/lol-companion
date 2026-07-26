@@ -396,7 +396,10 @@ public sealed class LcuLeagueClientAdapter
             VictimId: TryGetBoundedOptionalParticipantId(eventElement, "victimId"),
             ParticipantId: TryGetBoundedOptionalParticipantId(eventElement, "participantId"),
             AssistingParticipantIds: assists,
-            BuildingType: eventElement.TryGetProperty("buildingType", out var buildingType) ? buildingType.GetString() : null);
+            TeamId: TryGetSafeInt32(eventElement, "teamId"),
+            BuildingType: eventElement.TryGetProperty("buildingType", out var buildingType) ? buildingType.GetString() : null,
+            TowerType: eventElement.TryGetProperty("towerType", out var towerType) ? towerType.GetString() : null,
+            LaneType: eventElement.TryGetProperty("laneType", out var laneType) ? laneType.GetString() : null);
     }
 
     private static JsonElement GetGamesArray(JsonElement root)

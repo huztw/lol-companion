@@ -62,7 +62,10 @@ public sealed record LcuTimelineEventDto(
     int? VictimId,
     int? ParticipantId,
     IReadOnlyList<int> AssistingParticipantIds,
-    string? BuildingType
+    int? TeamId = null,
+    string? BuildingType = null,
+    string? TowerType = null,
+    string? LaneType = null
 );
 
 public sealed record LcuTimelineResult(bool IsAvailable, LcuTimelineDto? Timeline, string? UnavailableReason)

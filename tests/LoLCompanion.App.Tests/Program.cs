@@ -71,6 +71,7 @@ await TestClientUnavailableClearsListAndKeepsTerminalStatusAsync();
 await TestAnalysisRequiresPairingAsync();
 await TestAnalysisFlowAsync();
 await TestAnalysisDeliveryStateAsync();
+await TestAnalysisSchemaUpdateGuidanceAsync();
 await TestAnalysisCancellationAndDuplicatePreventionAsync();
 
 Console.WriteLine("LoL Companion app options tests passed.");
@@ -434,6 +435,27 @@ static async Task TestAnalysisDeliveryStateAsync()
     Assert(
         FindControl<Label>(form, "analysisStatusValue").Text == "分析已完成，但傳送未完成，請到 Discord 使用 `/report`。",
         "Expected delivery failure fallback status.");
+}
+
+static async Task TestAnalysisSchemaUpdateGuidanceAsync()
+{
+    var sessionManager = new FakeSessionManager(new CompanionSessionSnapshot(
+        DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+        "Arena Laptop",
+        "discord-user-1"));
+    var match = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T20:35:52.919Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
+    using var form = CreateMainForm(
+        sessionManager,
+        _ => Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>([match]),
+        (_, _) => Task.FromException<CompanionAnalysisWorkflowResult>(new CompanionAnalysisException(
+            "analysis_schema_update_required",
+            "A compatible LoL Companion version is required. Download: https://example.test/download",
+            false)));
+
+    await InvokeAnalyzeSelectedMatchAsync(form, match);
+    Assert(
+        FindControl<Label>(form, "analysisStatusValue").Text.Contains("https://example.test/download", StringComparison.Ordinal),
+        "Expected schema update guidance to preserve the download URL.");
 }
 
 static async Task TestAnalysisCancellationAndDuplicatePreventionAsync()

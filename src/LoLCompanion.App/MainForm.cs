@@ -497,6 +497,10 @@ public sealed class MainForm : Form
         {
             UpdateAnalysisStatus("尚未支援分析。", AnalysisStatusMode.Result);
         }
+        catch (CompanionAnalysisException exception) when (exception.Category is "analysis_schema_update_required")
+        {
+            UpdateAnalysisStatus($"需要更新 LoL Companion 才能使用 timeline-v2 分析。{exception.Message}", AnalysisStatusMode.Guidance);
+        }
         catch (Exception)
         {
             UpdateAnalysisStatus("分析暫時失敗，請稍後再試。", AnalysisStatusMode.Result);

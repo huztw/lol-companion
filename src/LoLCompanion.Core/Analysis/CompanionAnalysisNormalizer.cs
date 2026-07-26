@@ -23,10 +23,11 @@ public sealed class CompanionAnalysisNormalizer
     private const double MaxCcValue = 100_000;
     private const double MaxGoldValue = 500_000;
     private const long MaxTimelineTimestamp = 21_600_000;
+    private const int MaxTimelineLabelLength = 64;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
-    public CompanionAnalysisPayloadV1 Normalize(
+    public CompanionAnalysisPayloadV2 Normalize(
         LcuCurrentSummoner currentSummoner,
         LcuRecentMatchSummary selectedMatch,
         LcuMatchDetailDto matchDetail,
@@ -57,7 +58,7 @@ public sealed class CompanionAnalysisNormalizer
             throw new CompanionAnalysisException("team_shape_invalid", "Companion analysis requires exactly five teammates for the requested participant.");
         }
 
-        CompanionAnalysisTimelineV1? timeline = null;
+        CompanionAnalysisTimelineV2? timeline = null;
         string? timelineUnavailableReason = null;
         if (timelineResult.IsAvailable)
         {
@@ -80,10 +81,10 @@ public sealed class CompanionAnalysisNormalizer
             throw new CompanionAnalysisException("timeline_conflict", "Timeline payload and unavailable reason cannot both be present.");
         }
 
-        return new CompanionAnalysisPayloadV1(
+        return new CompanionAnalysisPayloadV2(
             requestedParticipant.Puuid,
             participants,
-            new CompanionAnalysisMatchV1(matchDetail.GameId.ToString(CultureInfo.InvariantCulture)),
+            new CompanionAnalysisMatchV2(matchDetail.GameId.ToString(CultureInfo.InvariantCulture)),
             timeline,
             timelineUnavailableReason
         );
@@ -118,7 +119,7 @@ public sealed class CompanionAnalysisNormalizer
         }
     }
 
-    private static CompanionAnalysisParticipantV1 NormalizeParticipant(LcuMatchParticipantDto participant, int index)
+    private static CompanionAnalysisParticipantV2 NormalizeParticipant(LcuMatchParticipantDto participant, int index)
     {
         ValidateRequiredString(participant.Puuid, $"participants[{index}].puuid");
         ValidateRequiredString(participant.RiotIdGameName, $"participants[{index}].riotIdGameName");
@@ -130,7 +131,7 @@ public sealed class CompanionAnalysisNormalizer
         ValidateBoundedInt(participant.Deaths, 0, MaxKdaValue, $"participants[{index}].deaths");
         ValidateBoundedInt(participant.Assists, 0, MaxKdaValue, $"participants[{index}].assists");
 
-        return new CompanionAnalysisParticipantV1(
+        return new CompanionAnalysisParticipantV2(
             participant.Puuid,
             participant.RiotIdGameName!,
             participant.RiotIdTagline!,
@@ -149,30 +150,30 @@ public sealed class CompanionAnalysisNormalizer
         );
     }
 
-    private static CompanionAnalysisTimelineV1 NormalizeTimeline(LcuTimelineDto timeline)
+    private static CompanionAnalysisTimelineV2 NormalizeTimeline(LcuTimelineDto timeline)
     {
         if (timeline.Frames.Count > MaxFrames)
         {
-            throw new CompanionAnalysisException("timeline_frames_invalid", "Timeline frame count exceeds the v1 limit.");
+            throw new CompanionAnalysisException("timeline_frames_invalid", "Timeline frame count exceeds the v2 limit.");
         }
 
         if (timeline.Events.Count > MaxEvents)
         {
-            throw new CompanionAnalysisException("timeline_events_invalid", "Timeline event count exceeds the v1 limit.");
+            throw new CompanionAnalysisException("timeline_events_invalid", "Timeline event count exceeds the v2 limit.");
         }
 
         var frames = timeline.Frames.Select((frame, index) =>
         {
             ValidateBoundedLong(frame.Timestamp, 0, MaxTimelineTimestamp, $"timeline.frames[{index}].timestamp");
-            var participantFrames = new Dictionary<string, CompanionAnalysisParticipantFrameV1>(StringComparer.Ordinal);
+            var participantFrames = new Dictionary<string, CompanionAnalysisParticipantFrameV2>(StringComparer.Ordinal);
             foreach (var entry in frame.ParticipantGoldById.OrderBy((item) => item.Key))
             {
                 ValidateBoundedInt(entry.Key, 1, MaxParticipantId, $"timeline.frames[{index}].participantFrames key");
                 participantFrames[entry.Key.ToString(CultureInfo.InvariantCulture)] =
-                    new CompanionAnalysisParticipantFrameV1(NormalizeMetric(entry.Value, MaxGoldValue, $"timeline.frames[{index}].participantFrames[{entry.Key}].totalGold")!.Value);
+                    new CompanionAnalysisParticipantFrameV2(NormalizeMetric(entry.Value, MaxGoldValue, $"timeline.frames[{index}].participantFrames[{entry.Key}].totalGold")!.Value);
             }
 
-            return new CompanionAnalysisTimelineFrameV1(frame.Timestamp, participantFrames);
+            return new CompanionAnalysisTimelineFrameV2(frame.Timestamp, participantFrames);
         }).ToArray();
 
         var events = timeline.Events.Select((eventDto, index) =>
@@ -194,18 +195,21 @@ public sealed class CompanionAnalysisNormalizer
                 ValidateBoundedInt(assist, 1, MaxParticipantId, $"timeline.events[{index}].assistingParticipantIds");
             }
 
-            return new CompanionAnalysisTimelineEventV1(
+            return new CompanionAnalysisTimelineEventV2(
                 eventDto.Type,
                 eventDto.Timestamp,
                 killerId,
                 victimId,
                 participantId,
                 assistingParticipantIds,
-                string.IsNullOrWhiteSpace(eventDto.BuildingType) ? null : eventDto.BuildingType
+                NormalizeOptionalTeamId(eventDto.TeamId),
+                NormalizeOptionalLabel(eventDto.BuildingType),
+                NormalizeOptionalLabel(eventDto.TowerType),
+                NormalizeOptionalLabel(eventDto.LaneType)
             );
         }).ToArray();
 
-        return new CompanionAnalysisTimelineV1(frames, events);
+        return new CompanionAnalysisTimelineV2(frames, events);
     }
 
     private static void ValidateRequiredString(string? value, string label)
@@ -226,6 +230,24 @@ public sealed class CompanionAnalysisNormalizer
 
     private static int? NormalizeOptionalParticipantId(int? value) =>
         value.HasValue && value.Value is >= 1 and <= 10 ? value : null;
+
+    private static int? NormalizeOptionalTeamId(int? value) =>
+        value.HasValue && value.Value is >= MinTeamId and <= MaxTeamId ? value : null;
+
+    private static string? NormalizeOptionalLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        if (value.Length > MaxTimelineLabelLength)
+        {
+            throw new CompanionAnalysisException("payload_invalid", "Timeline event label exceeds the supported length.");
+        }
+
+        return value;
+    }
 
     private static void ValidateOptionalBoundedInt(int? value, int minimum, int maximum, string label)
     {
