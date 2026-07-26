@@ -62,8 +62,12 @@ catch (InvalidOperationException exception)
 }
 
 await TestRecentMatchesUiAsync();
+TestVersionDisplay();
 await TestRecentMatchesRecoveryAndCancellationAsync();
+await TestRecentMatchesNoOpRefreshAsync();
 await TestRecentMatchesSelectionPersistenceAsync();
+await TestTransientRecoverableErrorPreservesUiStateAsync();
+await TestClientUnavailableClearsListAndKeepsTerminalStatusAsync();
 await TestAnalysisRequiresPairingAsync();
 await TestAnalysisFlowAsync();
 await TestAnalysisDeliveryStateAsync();
@@ -85,6 +89,27 @@ static void AssertInvalid(string value)
             !exception.Message.Contains(value, StringComparison.Ordinal),
             "Expected error message to avoid echoing input.");
     }
+}
+
+static void TestVersionDisplay()
+{
+    using var form = CreateLoadedMainForm(_ => Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>(Array.Empty<LcuRecentMatchSummary>()));
+    var title = FindControl<Label>(form, "appTitleLabel");
+    var informationalVersion = typeof(MainForm).Assembly
+        .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+        .InformationalVersion;
+    var expectedVersion = string.IsNullOrWhiteSpace(informationalVersion)
+        ? typeof(MainForm).Assembly.GetName().Version?.ToString() ?? string.Empty
+        : informationalVersion;
+    var metadataSeparator = expectedVersion.IndexOf('+', StringComparison.Ordinal);
+    if (metadataSeparator >= 0)
+    {
+        expectedVersion = expectedVersion[..metadataSeparator];
+    }
+
+    var expectedTitle = $"LoL Companion v{expectedVersion}";
+    Assert(form.Text == expectedTitle, "Expected form title to include normalized app version.");
+    Assert(title.Text == expectedTitle, "Expected title label to include normalized app version.");
 }
 
 static async Task TestRecentMatchesUiAsync()
@@ -125,7 +150,9 @@ static async Task TestRecentMatchesRecoveryAndCancellationAsync()
     });
 
     await form.RefreshLeagueClientAsync();
-    Assert(!string.IsNullOrWhiteSpace(FindControl<Label>(form, "leagueClientStatusValue").Text), "Expected status after lockfile loss.");
+    Assert(
+        FindControl<Label>(form, "leagueClientStatusValue").Text == "請先啟動 League Client，連線後將自動載入。",
+        "Expected client unavailable recoverable category to use the startup guidance message.");
 
     await form.RefreshLeagueClientAsync();
     Assert(FindControl<ListView>(form, "recentMatchesListView").Items.Count == 1, "Expected recovery after League Client restart.");
@@ -133,6 +160,139 @@ static async Task TestRecentMatchesRecoveryAndCancellationAsync()
     using var cancellation = new CancellationTokenSource();
     cancellation.Cancel();
     await AssertThrowsAsync<OperationCanceledException>(() => form.RefreshLeagueClientAsync(cancellation.Token), "Expected cancellation to flow.");
+}
+
+static async Task TestTransientRecoverableErrorPreservesUiStateAsync()
+{
+    var match = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T20:35:52.919Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
+    var sessionManager = new FakeSessionManager(new CompanionSessionSnapshot(
+        DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+        "Arena Laptop",
+        "discord-user-1"));
+    var attempts = 0;
+    using var form = CreateMainForm(
+        sessionManager,
+        _ =>
+        {
+            attempts++;
+            if (attempts == 1)
+            {
+                return Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>([match]);
+            }
+
+            throw new LcuException("lcu_timeout", "Timed out.", true);
+        },
+        (_, _) => Task.FromResult(new CompanionAnalysisWorkflowResult(
+            "request-1",
+            "job-1",
+            false,
+            new CompanionAnalysisStatusDtoV1(1, "job-1", "completed", "2026-07-25T10:00:00Z", "2026-07-25T10:01:00Z", true, "delivered", "none"),
+            [])));
+
+    await form.RefreshLeagueClientAsync();
+    var listView = FindControl<ListView>(form, "recentMatchesListView");
+    var originalItem = listView.Items[0];
+    SelectRecentMatch(form, 431945471);
+    SetTerminalAnalysisStatus(form, "分析已完成並已傳送 Discord。");
+
+    await form.RefreshLeagueClientAsync();
+
+    Assert(
+        FindControl<Label>(form, "leagueClientStatusValue").Text == "近期對戰載入失敗，將自動重試。",
+        "Expected transient recoverable category to use the retry guidance message.");
+    Assert(ReferenceEquals(originalItem, listView.Items[0]), "Expected transient recoverable error to keep the existing ListView items.");
+    Assert(listView.SelectedItems.Count == 1, "Expected transient recoverable error to preserve selection.");
+    Assert(((LcuRecentMatchSummary)listView.SelectedItems[0].Tag!).GameId == 431945471, "Expected the same match to stay selected after transient recoverable error.");
+    Assert(FindControl<Button>(form, "analyzeButton").Enabled, "Expected analysis button to remain enabled after transient recoverable error.");
+    Assert(
+        FindControl<Label>(form, "analysisStatusValue").Text == "分析已完成並已傳送 Discord。",
+        "Expected transient recoverable error not to overwrite terminal analysis status.");
+}
+
+static async Task TestClientUnavailableClearsListAndKeepsTerminalStatusAsync()
+{
+    var match = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T20:35:52.919Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
+    var sessionManager = new FakeSessionManager(new CompanionSessionSnapshot(
+        DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+        "Arena Laptop",
+        "discord-user-1"));
+    var attempts = 0;
+    using var form = CreateMainForm(
+        sessionManager,
+        _ =>
+        {
+            attempts++;
+            if (attempts == 1)
+            {
+                return Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>([match]);
+            }
+
+            throw new LcuException("lockfile_unavailable", "LCU lockfile not found.", true);
+        },
+        (_, _) => Task.FromResult(new CompanionAnalysisWorkflowResult(
+            "request-1",
+            "job-1",
+            false,
+            new CompanionAnalysisStatusDtoV1(1, "job-1", "completed", "2026-07-25T10:00:00Z", "2026-07-25T10:01:00Z", true, "delivered", "none"),
+            [])));
+
+    await form.RefreshLeagueClientAsync();
+    var listView = FindControl<ListView>(form, "recentMatchesListView");
+    SelectRecentMatch(form, 431945471);
+    SetTerminalAnalysisStatus(form, "分析已完成並已傳送 Discord。");
+
+    await form.RefreshLeagueClientAsync();
+
+    Assert(
+        FindControl<Label>(form, "leagueClientStatusValue").Text == "請先啟動 League Client，連線後將自動載入。",
+        "Expected client unavailable error to keep the startup guidance message.");
+    Assert(listView.Items.Count == 0, "Expected client unavailable error to clear the current recent matches.");
+    Assert(listView.SelectedItems.Count == 0, "Expected client unavailable error to clear selection.");
+    Assert(!FindControl<Button>(form, "analyzeButton").Enabled, "Expected analysis button to disable when recent matches are cleared.");
+    Assert(
+        FindControl<Label>(form, "analysisStatusValue").Text == "分析已完成並已傳送 Discord。",
+        "Expected client unavailable error not to overwrite terminal analysis status.");
+}
+
+static async Task TestRecentMatchesNoOpRefreshAsync()
+{
+    var sameMatch = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T20:35:52.919Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
+    var changedMatch = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T20:35:52.919Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 9, 2, 10, true, null);
+    var sessionManager = new FakeSessionManager(new CompanionSessionSnapshot(
+        DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+        "Arena Laptop",
+        "discord-user-1"));
+
+    var loads = new Queue<IReadOnlyList<LcuRecentMatchSummary>>([
+        [sameMatch],
+        [sameMatch],
+        [changedMatch]
+    ]);
+
+    using var form = CreateMainForm(
+        sessionManager,
+        _ => Task.FromResult(loads.Count == 0 ? Array.Empty<LcuRecentMatchSummary>() : loads.Dequeue()),
+        (_, _) => Task.FromResult(new CompanionAnalysisWorkflowResult(
+            "request-1",
+            "job-1",
+            false,
+            new CompanionAnalysisStatusDtoV1(1, "job-1", "completed", "2026-07-25T10:00:00Z", "2026-07-25T10:01:00Z", true, "delivered", "none"),
+            [])));
+
+    await form.RefreshLeagueClientAsync();
+    var listView = FindControl<ListView>(form, "recentMatchesListView");
+    var originalItem = listView.Items[0];
+    SelectRecentMatch(form, 431945471);
+    SetTerminalAnalysisStatus(form, "分析已完成並已傳送 Discord。");
+
+    await form.RefreshLeagueClientAsync();
+    Assert(ReferenceEquals(originalItem, listView.Items[0]), "Expected no-op refresh to preserve the same ListViewItem instance.");
+    Assert(FindControl<Button>(form, "analyzeButton").Enabled, "Expected analyze button to remain enabled after no-op refresh.");
+    Assert(FindControl<Label>(form, "analysisStatusValue").Text == "分析已完成並已傳送 Discord。", "Expected terminal analysis status to survive no-op refresh.");
+
+    await form.RefreshLeagueClientAsync();
+    Assert(!ReferenceEquals(originalItem, listView.Items[0]), "Expected changed match data to rebuild the ListView item.");
+    Assert(listView.Items[0].SubItems[3].Text == "9/2/10", "Expected rebuilt item to reflect updated KDA.");
 }
 
 static async Task TestRecentMatchesSelectionPersistenceAsync()
@@ -170,7 +330,7 @@ static async Task TestRecentMatchesSelectionPersistenceAsync()
     SelectRecentMatch(form, 431945471);
     Assert(FindControl<Button>(form, "analyzeButton").Enabled, "Expected supported selected match to enable analysis.");
     Assert(FindControl<Label>(form, "analysisStatusValue").Text == "可執行分析。", "Expected supported selected match status.");
-    FindControl<Label>(form, "analysisStatusValue").Text = "分析已完成並已傳送 Discord。";
+    SetTerminalAnalysisStatus(form, "分析已完成並已傳送 Discord。");
 
     await form.RefreshLeagueClientAsync();
     var listView = FindControl<ListView>(form, "recentMatchesListView");
@@ -396,6 +556,22 @@ static Task InvokeAnalyzeSelectedMatchAsync(MainForm form, LcuRecentMatchSummary
     }
 
     return (Task)method.Invoke(form, [match, cancellationToken])!;
+}
+
+static void SetTerminalAnalysisStatus(MainForm form, string message)
+{
+    var method = typeof(MainForm).GetMethod(
+        "UpdateAnalysisStatus",
+        BindingFlags.Instance | BindingFlags.NonPublic);
+
+    if (method is null)
+    {
+        throw new InvalidOperationException("Expected UpdateAnalysisStatus method.");
+    }
+
+    var statusModeParameter = method.GetParameters()[1].ParameterType;
+    var resultMode = Enum.Parse(statusModeParameter, "Result");
+    method.Invoke(form, [message, resultMode]);
 }
 
 static async Task AssertThrowsAsync<TException>(Func<Task> action, string message) where TException : Exception

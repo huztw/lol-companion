@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Reflection;
 using System.Windows.Forms;
 using LoLCompanion.Core.Analysis;
 using LoLCompanion.Core.Api;
@@ -10,6 +11,13 @@ namespace LoLCompanion.App;
 
 public sealed class MainForm : Form
 {
+    private enum AnalysisStatusMode
+    {
+        Guidance,
+        InProgress,
+        Result
+    }
+
     private readonly ICompanionSessionManager _sessionManager;
     private readonly CompanionPairingController _pairingController;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
@@ -33,6 +41,7 @@ public sealed class MainForm : Form
     private bool _refreshInProgress;
     private bool _analysisInProgress;
     private bool _suppressRecentMatchesSelectionUpdates;
+    private AnalysisStatusMode _analysisStatusMode = AnalysisStatusMode.Guidance;
     private bool _disposed;
 
     public MainForm(
@@ -47,15 +56,17 @@ public sealed class MainForm : Form
         _analyzeSelectedMatch = analyzeSelectedMatch ?? ThrowAnalysisNotConfigured;
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 2500 };
 
-        Text = "LoL Companion";
+        var applicationTitle = GetVersionedApplicationTitle();
+        Text = applicationTitle;
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(980, 760);
         Font = new Font("Segoe UI", 10F, FontStyle.Regular, GraphicsUnit.Point);
 
         var title = new Label
         {
+            Name = "appTitleLabel",
             AutoSize = true,
-            Text = "LoL Companion",
+            Text = applicationTitle,
             Font = new Font(Font.FontFamily, 20F, FontStyle.Bold),
             Dock = DockStyle.Fill,
             Padding = new Padding(0, 0, 0, 4)
@@ -292,16 +303,23 @@ public sealed class MainForm : Form
         {
             if (!_disposed && !IsDisposed)
             {
-                RunOnUiThread(() => SetLeagueClientUnavailable(exception.Category is "lockfile_unavailable" or "lockfile_invalid" or "lcu_connection_failed" or "lcu_auth_failed"
-                    ? "請先啟動 League Client，連線後將自動載入。"
-                    : "請先啟動 League Client，連線後將自動載入。"));
+                RunOnUiThread(() =>
+                {
+                    if (IsLeagueClientUnavailableCategory(exception.Category))
+                    {
+                        SetLeagueClientUnavailable("請先啟動 League Client，連線後將自動載入。");
+                        return;
+                    }
+
+                    SetLeagueClientRefreshIssue("近期對戰載入失敗，將自動重試。");
+                });
             }
         }
         catch (Exception)
         {
             if (!_disposed && !IsDisposed)
             {
-                RunOnUiThread(() => SetLeagueClientUnavailable("近期對戰載入失敗，將自動重試。"));
+                RunOnUiThread(() => SetLeagueClientRefreshIssue("近期對戰載入失敗，將自動重試。"));
             }
         }
         finally
@@ -456,14 +474,14 @@ public sealed class MainForm : Form
 
         _analysisInProgress = true;
         UpdateAnalysisUi();
-        UpdateAnalysisStatus("正在讀取對局並送出分析…");
+        UpdateAnalysisStatus("正在讀取對局並送出分析…", AnalysisStatusMode.InProgress);
 
         try
         {
             var result = await _analyzeSelectedMatch(selectedMatch, cancellationToken);
             if (!_disposed && !IsDisposed)
             {
-                UpdateAnalysisStatus(FormatAnalysisResult(result));
+                UpdateAnalysisStatus(FormatAnalysisResult(result), AnalysisStatusMode.Result);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested || _lifetimeCancellation.IsCancellationRequested || _disposed || IsDisposed)
@@ -473,15 +491,15 @@ public sealed class MainForm : Form
         {
             _sessionManager.ClearUnauthorized();
             RefreshSessionStatus();
-            UpdateAnalysisStatus("Discord 工作階段已失效，請重新配對。");
+            UpdateAnalysisStatus("Discord 工作階段已失效，請重新配對。", AnalysisStatusMode.Guidance);
         }
         catch (CompanionAnalysisException exception) when (exception.Category is "unsupported_queue")
         {
-            UpdateAnalysisStatus("尚未支援分析。");
+            UpdateAnalysisStatus("尚未支援分析。", AnalysisStatusMode.Result);
         }
         catch (Exception)
         {
-            UpdateAnalysisStatus("分析暫時失敗，請稍後再試。");
+            UpdateAnalysisStatus("分析暫時失敗，請稍後再試。", AnalysisStatusMode.Result);
         }
         finally
         {
@@ -495,14 +513,33 @@ public sealed class MainForm : Form
 
     private void ApplyRecentMatches(IReadOnlyList<LcuRecentMatchSummary> matches)
     {
+        var displayedMatches = matches.Take(20).ToArray();
         var selectedGameId = GetSelectedMatch()?.GameId;
+        if (HasSameDisplayedMatches(displayedMatches))
+        {
+            _leagueClientStatusValue.Text = displayedMatches.Length == 0
+                ? "已連線，但目前沒有可顯示的近期對戰。"
+                : $"已連線，已載入 {displayedMatches.Length} 場近期對戰。";
+
+            if (selectedGameId.HasValue)
+            {
+                UpdateAnalyzeButtonState();
+            }
+            else
+            {
+                UpdateAnalysisUi();
+            }
+
+            return;
+        }
+
         _suppressRecentMatchesSelectionUpdates = true;
         var restoredSelection = false;
         _recentMatchesListView.BeginUpdate();
         try
         {
             _recentMatchesListView.Items.Clear();
-            foreach (var match in matches.Take(20))
+            foreach (var match in displayedMatches)
             {
                 var item = new ListViewItem(match.Win ? "勝" : "敗")
                 {
@@ -545,7 +582,7 @@ public sealed class MainForm : Form
 
         _leagueClientStatusValue.Text = matches.Count == 0
             ? "已連線，但目前沒有可顯示的近期對戰。"
-            : $"已連線，已載入 {Math.Min(20, matches.Count)} 場近期對戰。";
+            : $"已連線，已載入 {displayedMatches.Length} 場近期對戰。";
 
         if (restoredSelection)
         {
@@ -560,17 +597,32 @@ public sealed class MainForm : Form
     private void SetLeagueClientUnavailable(string message)
     {
         _leagueClientStatusValue.Text = message;
+        _suppressRecentMatchesSelectionUpdates = true;
         _recentMatchesListView.BeginUpdate();
         try
         {
+            _recentMatchesListView.SelectedIndices.Clear();
             _recentMatchesListView.Items.Clear();
         }
         finally
         {
             _recentMatchesListView.EndUpdate();
+            _suppressRecentMatchesSelectionUpdates = false;
+        }
+
+        if (ShouldPreserveAnalysisStatusOnLeagueClientUnavailable())
+        {
+            UpdateAnalyzeButtonState();
+            return;
         }
 
         UpdateAnalysisUi();
+    }
+
+    private void SetLeagueClientRefreshIssue(string message)
+    {
+        _leagueClientStatusValue.Text = message;
+        UpdateAnalyzeButtonState();
     }
 
     private void OnRecentMatchesSelectionChanged(object? sender, EventArgs e)
@@ -590,6 +642,7 @@ public sealed class MainForm : Form
         var selectedMatch = GetSelectedMatch();
         var hasSession = _sessionManager.GetActiveSession() is not null;
         var supported = selectedMatch?.IsSupported == true;
+        _analysisStatusMode = AnalysisStatusMode.Guidance;
 
         if (!hasSession)
         {
@@ -615,8 +668,9 @@ public sealed class MainForm : Form
         _analyzeButton.Enabled = !_analysisInProgress && hasSession && supported;
     }
 
-    private void UpdateAnalysisStatus(string message)
+    private void UpdateAnalysisStatus(string message, AnalysisStatusMode statusMode = AnalysisStatusMode.Guidance)
     {
+        _analysisStatusMode = statusMode;
         _analysisStatusValue.Text = message;
     }
 
@@ -644,6 +698,39 @@ public sealed class MainForm : Form
 
     private Task<CompanionAnalysisWorkflowResult> ThrowAnalysisNotConfigured(LcuRecentMatchSummary _, CancellationToken __) =>
         throw new InvalidOperationException("Analysis workflow is not configured.");
+
+    private bool ShouldPreserveAnalysisStatusOnLeagueClientUnavailable() =>
+        _analysisStatusMode is AnalysisStatusMode.InProgress or AnalysisStatusMode.Result;
+
+    private static bool IsLeagueClientUnavailableCategory(string category) =>
+        category is "lockfile_unavailable" or "lockfile_invalid" or "lcu_connection_failed" or "lcu_auth_failed";
+
+    private static string GetVersionedApplicationTitle()
+    {
+        const string baseTitle = "LoL Companion";
+        var version = typeof(MainForm).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?
+            .InformationalVersion;
+
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            version = typeof(MainForm).Assembly.GetName().Version?.ToString();
+        }
+
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return baseTitle;
+        }
+
+        var metadataSeparator = version.IndexOf('+', StringComparison.Ordinal);
+        var normalizedVersion = metadataSeparator >= 0
+            ? version[..metadataSeparator]
+            : version;
+
+        return string.IsNullOrWhiteSpace(normalizedVersion)
+            ? baseTitle
+            : $"{baseTitle} v{normalizedVersion}";
+    }
 
     private void RunOnUiThread(Action action)
     {
@@ -693,6 +780,41 @@ public sealed class MainForm : Form
             ? duration.ToString(@"h\:mm\:ss")
             : duration.ToString(@"mm\:ss");
     }
+
+    private bool HasSameDisplayedMatches(IReadOnlyList<LcuRecentMatchSummary> matches)
+    {
+        if (_recentMatchesListView.Items.Count != matches.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < matches.Count; index++)
+        {
+            if (_recentMatchesListView.Items[index].Tag is not LcuRecentMatchSummary existingMatch ||
+                !RecentMatchesEqual(existingMatch, matches[index]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool RecentMatchesEqual(LcuRecentMatchSummary left, LcuRecentMatchSummary right) =>
+        left.GameId == right.GameId &&
+        left.QueueId == right.QueueId &&
+        string.Equals(left.GameMode, right.GameMode, StringComparison.Ordinal) &&
+        string.Equals(left.GameType, right.GameType, StringComparison.Ordinal) &&
+        left.CreatedAt == right.CreatedAt &&
+        left.Duration == right.Duration &&
+        left.Win == right.Win &&
+        left.ChampionId == right.ChampionId &&
+        string.Equals(left.ChampionName, right.ChampionName, StringComparison.Ordinal) &&
+        left.Kills == right.Kills &&
+        left.Deaths == right.Deaths &&
+        left.Assists == right.Assists &&
+        left.IsSupported == right.IsSupported &&
+        string.Equals(left.UnsupportedReason, right.UnsupportedReason, StringComparison.Ordinal);
 
     private void UpdatePairingUi(bool inProgress, string statusText)
     {
