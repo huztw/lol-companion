@@ -1064,7 +1064,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
             participant.ParticipantId,
             participant.TeamId,
             participant.Win,
-            1,
+            participant.ChampionId,
             participant.ChampionName,
             participant.Kills,
             participant.Deaths,
@@ -1091,6 +1091,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(normalized.RequestedParticipantPuuid == fixture.RequestedParticipantPuuid, "Expected requested participant to be preserved.");
     Assert(normalized.Participants.Count == 10, "Expected exactly ten participants.");
     Assert(normalized.Participants.Count(participant => participant.TeamId == 100) == 5, "Expected exactly five teammates.");
+    Assert(normalized.Participants[0].ChampionId == 1, "Expected numeric champion id to be preserved.");
     Assert(normalized.Timeline is not null, "Expected timeline to be present for available timeline.");
     Assert(normalized.Timeline!.Frames.Count == 2, "Expected timeline frame bound to survive.");
     Assert(normalized.Timeline.Events.Count == 2, "Expected timeline event bound to survive.");
@@ -1184,6 +1185,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(!firstParticipant.TryGetProperty("timeCCingOthers", out _), "Expected null metric to be omitted.");
     Assert(!firstParticipant.TryGetProperty("totalHealsOnTeammates", out _), "Expected null heal metric to be omitted.");
     Assert(!firstParticipant.TryGetProperty("totalDamageShieldedOnTeammates", out _), "Expected null shield metric to be omitted.");
+    Assert(firstParticipant.GetProperty("championId").GetInt32() == 1, "Expected numeric champion id to be serialized.");
 
     var unavailableRequest = new CompanionAnalysisSubmitRequest(
         "request-2",
@@ -1217,6 +1219,20 @@ static async Task TestCompanionAnalysisNormalizerAsync()
         new LcuMatchDetailDto(matchDetail.GameId, matchDetail.QueueId, matchDetail.GameMode, matchDetail.GameType, matchDetail.GameCreation, matchDetail.GameDuration,
             matchDetail.Participants.Select((participant, index) => index == 0 ? participant with { TotalDamageDealtToChampions = double.PositiveInfinity } : participant).ToArray()),
         timeline)), "Expected metric bounds validation to fail.");
+
+    await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(
+        currentSummoner,
+        selectedMatch,
+        new LcuMatchDetailDto(matchDetail.GameId, matchDetail.QueueId, matchDetail.GameMode, matchDetail.GameType, matchDetail.GameCreation, matchDetail.GameDuration,
+            matchDetail.Participants.Select((participant, index) => index == 0 ? participant with { ChampionId = 0 } : participant).ToArray()),
+        timeline)), "Expected non-positive champion id to fail.");
+
+    await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(
+        currentSummoner,
+        selectedMatch,
+        new LcuMatchDetailDto(matchDetail.GameId, matchDetail.QueueId, matchDetail.GameMode, matchDetail.GameType, matchDetail.GameCreation, matchDetail.GameDuration,
+            matchDetail.Participants.Select((participant, index) => index == 0 ? participant with { ChampionId = 10_000_000 } : participant).ToArray()),
+        timeline)), "Expected oversized champion id to fail.");
 
     await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(
         currentSummoner,
@@ -1514,7 +1530,7 @@ static void Assert(bool condition, string message)
 
 static CompanionAnalysisPayloadV2 LoadAnalysisFixture()
 {
-    var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "companion-analysis-request-v2.json");
+    var path = Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "fixtures", "companion-analysis-request-v4.json");
     using var document = JsonDocument.Parse(File.ReadAllText(path));
     var payload = document.RootElement.GetProperty("payload");
     return new CompanionAnalysisPayloadV2(
@@ -1526,6 +1542,7 @@ static CompanionAnalysisPayloadV2 LoadAnalysisFixture()
             participant.GetProperty("participantId").GetInt32(),
             participant.GetProperty("teamId").GetInt32(),
             participant.GetProperty("win").GetBoolean(),
+            participant.GetProperty("championId").GetInt32(),
             participant.GetProperty("championName").GetString()!,
             participant.GetProperty("kills").GetInt32(),
             participant.GetProperty("deaths").GetInt32(),

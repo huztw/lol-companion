@@ -2,7 +2,7 @@ namespace LoLCompanion.Core.Contracts;
 
 public static class CompanionAnalysisContract
 {
-    public const int SchemaVersion = 3;
+    public const int SchemaVersion = 4;
     public const int MaxRequestBytes = 256 * 1024;
 }
 
@@ -34,6 +34,7 @@ public sealed record CompanionAnalysisParticipantV2(
     int ParticipantId,
     int TeamId,
     bool Win,
+    int ChampionId,
     string ChampionName,
     int Kills,
     int Deaths,

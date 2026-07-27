@@ -16,8 +16,9 @@ var current = await client.GetCurrentSessionAsync("session-token-1");
 await client.RevokeCurrentSessionAsync("session-token-1");
 var submitFixturePath = Path.GetFullPath(Path.Combine(
     AppContext.BaseDirectory, "..", "..", "..", "..",
-    "fixtures", "companion-analysis-request-v3.json"));
+    "fixtures", "companion-analysis-request-v4.json"));
 var submitBody = await File.ReadAllBytesAsync(submitFixturePath);
+using var submitDocument = JsonDocument.Parse(submitBody);
 var submit = await client.SubmitAnalysisAsync("session-token-2", submitBody);
 var status = await client.GetAnalysisStatusAsync("session-token-2", "job/with spaces?=yes", default);
 var version = await client.GetVersionAsync();
@@ -35,8 +36,9 @@ Assert(handler.Requests[3].Method == HttpMethod.Post, "Expected POST for submit.
 Assert(handler.Requests[3].Authorization == "Bearer session-token-2", "Expected bearer token on submit.");
 Assert(handler.Requests[3].ContentType == "application/json; charset=utf-8", "Expected JSON utf-8 content type on submit.");
 Assert(handler.Requests[3].Body == Encoding.UTF8.GetString(submitBody), "Expected submit body to pass through unchanged.");
-Assert(handler.Requests[3].Body?.Contains("\"schemaVersion\":3", StringComparison.Ordinal) == true, "Expected shared schema 3 fixture.");
-Assert(handler.Requests[3].Body?.Contains("\"gameDataVersion\":\"16.14.794.5912\"", StringComparison.Ordinal) == true, "Expected shared game data version.");
+Assert(submitDocument.RootElement.GetProperty("schemaVersion").GetInt32() == 4, "Expected shared schema 4 fixture.");
+Assert(submitDocument.RootElement.GetProperty("payload").GetProperty("participants")[0].GetProperty("championId").GetInt32() == 1, "Expected numeric champion id in shared fixture.");
+Assert(submitDocument.RootElement.GetProperty("payload").GetProperty("match").GetProperty("gameDataVersion").GetString() == "16.14.794.5912", "Expected shared game data version.");
 Assert(handler.Requests[4].RequestUri?.AbsoluteUri == "https://companion.local/companion/analyses/job%2Fwith%20spaces%3F%3Dyes", "Expected escaped job id path.");
 Assert(handler.Requests[4].Method == HttpMethod.Get, "Expected GET for status.");
 Assert(handler.Requests[4].Authorization == "Bearer session-token-2", "Expected bearer token on status.");
@@ -58,8 +60,8 @@ Assert(version.SchemaVersion == 1, "Expected version schema version.");
 Assert(version.Current.LatestVersion == "1.2.3", "Expected latest version.");
 Assert(version.Current.DownloadUrl == "https://example.com/Companion.zip", "Expected download url.");
 Assert(version.Current.Sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "Expected sha256 checksum.");
-Assert(version.Analysis?.CurrentSchemaVersion == 3, "Expected current analysis schema version.");
-Assert(version.Analysis?.MinimumSchemaVersion == 3, "Expected minimum analysis schema version.");
+Assert(version.Analysis?.CurrentSchemaVersion == 4, "Expected current analysis schema version.");
+Assert(version.Analysis?.MinimumSchemaVersion == 4, "Expected minimum analysis schema version.");
 
 Console.WriteLine("LoL Companion contract smoke passed.");
 
@@ -133,8 +135,8 @@ sealed class FakeHandler : HttpMessageHandler
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
               "analysis": {
-                "currentSchemaVersion": 3,
-                "minimumSchemaVersion": 3
+                "currentSchemaVersion": 4,
+                "minimumSchemaVersion": 4
               }
             }
             """;

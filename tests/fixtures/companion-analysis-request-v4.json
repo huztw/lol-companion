@@ -1,0 +1,32 @@
+{
+  "requestId": "11111111-1111-4111-8111-111111111111",
+  "gameId": 431945471,
+  "schemaVersion": 4,
+  "queueId": 450,
+  "payload": {
+    "requestedParticipantPuuid": "player-1",
+    "participants": [
+      { "puuid":"player-1", "riotIdGameName":"Player1", "riotIdTagline":"TST1", "participantId":1, "teamId":100, "win":true, "championId":1, "championName":"Annie", "kills":8, "deaths":2, "assists":10 },
+      { "puuid":"player-2", "riotIdGameName":"Player2", "riotIdTagline":"TST1", "participantId":2, "teamId":100, "win":true, "championId":99, "championName":"Lux", "kills":6, "deaths":3, "assists":12 },
+      { "puuid":"player-3", "riotIdGameName":"Player3", "riotIdTagline":"TST1", "participantId":3, "teamId":100, "win":true, "championId":89, "championName":"Leona", "kills":2, "deaths":4, "assists":14 },
+      { "puuid":"player-4", "riotIdGameName":"Player4", "riotIdTagline":"TST1", "participantId":4, "teamId":100, "win":true, "championId":201, "championName":"Braum", "kills":1, "deaths":5, "assists":9 },
+      { "puuid":"player-5", "riotIdGameName":"Player5", "riotIdTagline":"TST1", "participantId":5, "teamId":100, "win":true, "championId":147, "championName":"Seraphine", "kills":1, "deaths":3, "assists":11 },
+      { "puuid":"player-6", "riotIdGameName":"Player6", "riotIdTagline":"TST1", "participantId":6, "teamId":200, "win":false, "championId":103, "championName":"Ahri", "kills":4, "deaths":5, "assists":3 },
+      { "puuid":"player-7", "riotIdGameName":"Player7", "riotIdTagline":"TST1", "participantId":7, "teamId":200, "win":false, "championId":81, "championName":"Ezreal", "kills":5, "deaths":5, "assists":2 },
+      { "puuid":"player-8", "riotIdGameName":"Player8", "riotIdTagline":"TST1", "participantId":8, "teamId":200, "win":false, "championId":267, "championName":"Nami", "kills":2, "deaths":6, "assists":5 },
+      { "puuid":"player-9", "riotIdGameName":"Player9", "riotIdTagline":"TST1", "participantId":9, "teamId":200, "win":false, "championId":875, "championName":"Sett", "kills":3, "deaths":4, "assists":4 },
+      { "puuid":"player-10", "riotIdGameName":"Player10", "riotIdTagline":"TST1", "participantId":10, "teamId":200, "win":false, "championId":37, "championName":"Sona", "kills":1, "deaths":5, "assists":6 }
+    ],
+    "match": { "matchId": "431945471", "gameDataVersion": "16.14.794.5912" },
+    "timeline": {
+      "frames": [
+        { "timestamp":60000, "participantFrames": { "1":{"totalGold":2500}, "2":{"totalGold":2400}, "3":{"totalGold":2300}, "4":{"totalGold":2200}, "5":{"totalGold":2350}, "6":{"totalGold":2100}, "7":{"totalGold":2050}, "8":{"totalGold":2000}, "9":{"totalGold":2150}, "10":{"totalGold":1980} } },
+        { "timestamp":120000, "participantFrames": { "1":{"totalGold":4800}, "2":{"totalGold":4550}, "3":{"totalGold":4300}, "4":{"totalGold":4100}, "5":{"totalGold":4400}, "6":{"totalGold":3900}, "7":{"totalGold":3850}, "8":{"totalGold":3700}, "9":{"totalGold":4000}, "10":{"totalGold":3600} } }
+      ],
+      "events": [
+        { "type":"CHAMPION_KILL", "timestamp":61000, "killerId":1, "victimId":6, "participantId":null, "assistingParticipantIds":[2,3], "teamId":100, "buildingType":null, "towerType":null, "laneType":null },
+        { "type":"BUILDING_KILL", "timestamp":121000, "killerId":null, "victimId":null, "participantId":4, "assistingParticipantIds":[], "teamId":100, "buildingType":"TOWER_BUILDING", "towerType":"OUTER_TURRET", "laneType":"MID_LANE" }
+      ]
+    }
+  }
+}

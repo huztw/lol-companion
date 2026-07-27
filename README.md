@@ -1,14 +1,14 @@
-# LoL Companion v0.1.0-alpha.5
+# LoL Companion v0.1.0-alpha.6
 
 LoL Companion 是一個 Windows 桌面輔助工具。目前這個 pre-release 版本包含最小可用的 Discord 配對、League Client 偵測、近期對戰清單，以及選取對局後送出分析報告的流程。
 
 ## 目前版本範圍
 
-- `v0.1.0-alpha.5`
+- `v0.1.0-alpha.6`
 - 支援 Discord 配對與 2 小時 memory-only session
 - 支援自動偵測 League Client，並顯示最近 20 場對戰
 - 支援選取可分析對局並送出報告到 Discord
-- 支援 analysis schema 3、結算裝備／增幅裝置資料與 timeline-v2 戰局影響分析
+- 支援 analysis schema 4、數字英雄 ID、結算裝備／增幅裝置資料與 timeline-v3 戰局影響分析
 - 近期對戰資料未變時保留清單與選取狀態，減少定時刷新造成的閃爍
 - 改善 League Client 暫時性錯誤提示，避免清除既有清單或分析結果
 - 視窗標題顯示目前 Companion 版本

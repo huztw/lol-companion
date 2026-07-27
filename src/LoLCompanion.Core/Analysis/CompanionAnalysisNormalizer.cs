@@ -27,6 +27,7 @@ public sealed class CompanionAnalysisNormalizer
     private const int MaxFinalItems = 7;
     private const int MaxAugments = 6;
     private const int MaxConfigurationId = 9_999_999;
+    private const int MaxChampionId = 9_999_999;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -132,6 +133,7 @@ public sealed class CompanionAnalysisNormalizer
         ValidateRequiredString(participant.ChampionName, $"participants[{index}].championName");
         ValidateBoundedInt(participant.ParticipantId, 1, MaxParticipantId, $"participants[{index}].participantId");
         ValidateBoundedInt(participant.TeamId, MinTeamId, MaxTeamId, $"participants[{index}].teamId");
+        ValidateBoundedInt(participant.ChampionId, 1, MaxChampionId, $"participants[{index}].championId");
         ValidateBoundedInt(participant.Kills, 0, MaxKdaValue, $"participants[{index}].kills");
         ValidateBoundedInt(participant.Deaths, 0, MaxKdaValue, $"participants[{index}].deaths");
         ValidateBoundedInt(participant.Assists, 0, MaxKdaValue, $"participants[{index}].assists");
@@ -143,6 +145,7 @@ public sealed class CompanionAnalysisNormalizer
             participant.ParticipantId,
             participant.TeamId,
             participant.Win,
+            participant.ChampionId,
             participant.ChampionName!,
             participant.Kills,
             participant.Deaths,
