@@ -14,6 +14,7 @@ await TestCurrentSummonerDisplayNameFallbackAsync();
 await TestRecentMatchMappingAsync();
 await TestNestedRecentMatchMappingAsync();
 await TestDetailAndTimelineAsync();
+await TestConfigurationFieldMissingAsync();
 await TestNestedDetailMappingAsync();
 await TestChampionSummaryResolutionAsync();
 await TestChampionSummaryFallbackAsync();
@@ -498,6 +499,20 @@ static async Task TestChampionSummaryFallbackAsync()
     Assert(detail.Participants[0].ChampionName == "Champion #1", "Expected detail champion name to fall back to a stable label.");
 }
 
+static async Task TestConfigurationFieldMissingAsync()
+{
+    var adapter = CreateAdapter(
+        [new LcuLockfileDiscoveryResult(LcuDiscoveryStatus.Found, new LcuCredential(1, "127.0.0.1", 2999, "https", "secret"), "lockfile", "found")],
+        [new RecordingHandler((request, _) =>
+        {
+            var gameId = request.RequestUri!.AbsolutePath.EndsWith("/1", StringComparison.Ordinal) ? 1 : 2;
+            var missingItem = gameId == 1;
+            return Json($$"""{"gameId":{{gameId}},"queueId":450,"gameMode":"ARAM","gameType":"MATCHED","gameCreation":1,"gameDuration":1,"participants":[{"puuid":"p","participantId":1,"teamId":100,"win":true,"championId":1,"championName":"Annie","kills":0,"deaths":0,"assists":0,"item0":0,"item1":0,"item2":0,"item3":0,"item4":0,"item5":0{{(missingItem ? "" : ",\"item6\":0")}},"playerAugment1":0,"playerAugment2":0,"playerAugment3":0,"playerAugment4":0,"playerAugment5":0{{(missingItem ? ",\"playerAugment6\":0" : "")}}}] }""");
+        })]);
+    Assert((await adapter.GetMatchDetailAsync(1)).Participants[0].Items is null, "Expected missing item6 to produce null items.");
+    Assert((await adapter.GetMatchDetailAsync(2)).Participants[0].Augments is null, "Expected missing playerAugment6 to produce null augments.");
+}
+
 static async Task TestDetailAndTimelineAsync()
 {
     var requests = new List<Uri?>();
@@ -537,7 +552,9 @@ static async Task TestDetailAndTimelineAsync()
                           "totalDamageTaken": 14000,
                           "timeCCingOthers": 30,
                           "totalHealsOnTeammates": 1000,
-                          "totalDamageShieldedOnTeammates": 500
+                          "totalDamageShieldedOnTeammates": 500,
+                          "item0": 1000, "item1": 1001, "item2": 1002, "item3": 1003, "item4": 1004, "item5": 1005, "item6": 1006,
+                          "playerAugment1": 2001, "playerAugment2": 2002, "playerAugment3": 2003, "playerAugment4": 2004, "playerAugment5": 2005, "playerAugment6": 2006
                         }
                       ]
                     }
@@ -579,6 +596,8 @@ static async Task TestDetailAndTimelineAsync()
 
     var detail = await adapter.GetMatchDetailAsync(431945471);
     Assert(detail.QueueId == 2400, "Expected detailed queue id.");
+    Assert(detail.Participants[0].Items!.SequenceEqual([1000, 1001, 1002, 1003, 1004, 1005, 1006]), "Expected adapter to parse item0..item6.");
+    Assert(detail.Participants[0].Augments!.SequenceEqual([2001, 2002, 2003, 2004, 2005, 2006]), "Expected adapter to parse playerAugment1..playerAugment6.");
     var detailRequests = requests.Count(request => request?.AbsolutePath.EndsWith("/games/431945471", StringComparison.Ordinal) == true);
     var summaryRequests = requests.Count(request => request?.AbsolutePath.Contains("champion-summary.json", StringComparison.Ordinal) == true);
     var timelineRequestsBeforeCall = requests.Count(request => request?.AbsolutePath.Contains("/game-timelines/", StringComparison.Ordinal) == true);
@@ -1077,6 +1096,19 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(normalized.Timeline.Events.Count == 2, "Expected timeline event bound to survive.");
     Assert(normalized.Timeline.Events[1].TeamId == 100, "Expected building event team id to survive.");
     Assert(normalized.Timeline.Events[1].TowerType == "OUTER_TURRET", "Expected tower subtype to survive.");
+    Assert(normalized.Participants.All(participant => participant.Items.Count == 0 && participant.Augments.Count == 0), "Expected missing final configuration to degrade to empty lists.");
+
+    var configuredMatchDetail = matchDetail with
+    {
+        Participants = matchDetail.Participants.Select((participant, index) => index == 0
+            ? participant with { Items = [1, 2, 3, 4, 5, 6, 7], Augments = [11, 12, 13, 14, 15, 16] }
+            : participant).ToArray()
+    };
+    var configured = normalizer.Normalize(currentSummoner, selectedMatch, configuredMatchDetail, timeline);
+    Assert(configured.Participants[0].Items.SequenceEqual([1, 2, 3, 4, 5, 6, 7]), "Expected item0..item6 shape to round-trip.");
+    Assert(configured.Participants[0].Augments.SequenceEqual([11, 12, 13, 14, 15, 16]), "Expected playerAugment1..playerAugment6 shape to round-trip.");
+    await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(currentSummoner, selectedMatch, matchDetail with { Participants = matchDetail.Participants.Select((participant, index) => index == 0 ? participant with { Items = Enumerable.Repeat(1, 8).ToArray() } : participant).ToArray() }, timeline)), "Expected oversized item list to fail.");
+    await AssertThrowsAsync<CompanionAnalysisException>(() => Task.FromResult(normalizer.Normalize(currentSummoner, selectedMatch, matchDetail with { Participants = matchDetail.Participants.Select((participant, index) => index == 0 ? participant with { Augments = [-1] } : participant).ToArray() }, timeline)), "Expected invalid augment id to fail.");
 
     var timelineWithSystemIds = new LcuTimelineResult(
         true,
@@ -1502,8 +1534,14 @@ static CompanionAnalysisPayloadV2 LoadAnalysisFixture()
             participant.TryGetProperty("totalDamageTaken", out var taken) ? taken.GetDouble() : null,
             participant.TryGetProperty("timeCCingOthers", out var cc) ? cc.GetDouble() : null,
             participant.TryGetProperty("totalHealsOnTeammates", out var heal) ? heal.GetDouble() : null,
-            participant.TryGetProperty("totalDamageShieldedOnTeammates", out var shield) ? shield.GetDouble() : null)).ToArray(),
-        new CompanionAnalysisMatchV2(payload.GetProperty("match").GetProperty("matchId").GetString()!),
+            participant.TryGetProperty("totalDamageShieldedOnTeammates", out var shield) ? shield.GetDouble() : null,
+            participant.TryGetProperty("items", out var items) ? items.EnumerateArray().Select(item => item.GetInt32()).ToArray() : Enumerable.Repeat(0, 7).ToArray(),
+            participant.TryGetProperty("augments", out var augments) ? augments.EnumerateArray().Select(augment => augment.GetInt32()).ToArray() : Enumerable.Repeat(0, 6).ToArray())).ToArray(),
+        new CompanionAnalysisMatchV2(
+            payload.GetProperty("match").GetProperty("matchId").GetString()!,
+            payload.TryGetProperty("match", out var match) && match.TryGetProperty("gameDataVersion", out var gameDataVersion)
+                ? gameDataVersion.GetString()!
+                : "16.14.794.5912"),
         new CompanionAnalysisTimelineV2(
             payload.GetProperty("timeline").GetProperty("frames").EnumerateArray().Select(frame => new CompanionAnalysisTimelineFrameV2(
                 frame.GetProperty("timestamp").GetInt64(),

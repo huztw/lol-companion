@@ -24,6 +24,9 @@ public sealed class CompanionAnalysisNormalizer
     private const double MaxGoldValue = 500_000;
     private const long MaxTimelineTimestamp = 21_600_000;
     private const int MaxTimelineLabelLength = 64;
+    private const int MaxFinalItems = 7;
+    private const int MaxAugments = 6;
+    private const int MaxConfigurationId = 9_999_999;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -84,7 +87,9 @@ public sealed class CompanionAnalysisNormalizer
         return new CompanionAnalysisPayloadV2(
             requestedParticipant.Puuid,
             participants,
-            new CompanionAnalysisMatchV2(matchDetail.GameId.ToString(CultureInfo.InvariantCulture)),
+            new CompanionAnalysisMatchV2(
+                matchDetail.GameId.ToString(CultureInfo.InvariantCulture),
+                string.IsNullOrWhiteSpace(matchDetail.GameDataVersion) ? "unknown" : matchDetail.GameDataVersion),
             timeline,
             timelineUnavailableReason
         );
@@ -146,8 +151,24 @@ public sealed class CompanionAnalysisNormalizer
             NormalizeMetric(participant.TotalDamageTaken, MaxDamageValue, $"participants[{index}].totalDamageTaken"),
             NormalizeMetric(participant.TimeCCingOthers, MaxCcValue, $"participants[{index}].timeCCingOthers"),
             NormalizeMetric(participant.TotalHealsOnTeammates, MaxDamageValue, $"participants[{index}].totalHealsOnTeammates"),
-            NormalizeMetric(participant.TotalDamageShieldedOnTeammates, MaxDamageValue, $"participants[{index}].totalDamageShieldedOnTeammates")
+            NormalizeMetric(participant.TotalDamageShieldedOnTeammates, MaxDamageValue, $"participants[{index}].totalDamageShieldedOnTeammates"),
+            NormalizeConfigurationIds(participant.Items, MaxFinalItems, $"participants[{index}].items"),
+            NormalizeConfigurationIds(participant.Augments, MaxAugments, $"participants[{index}].augments")
         );
+    }
+
+    private static IReadOnlyList<int> NormalizeConfigurationIds(IReadOnlyList<int>? values, int maximumCount, string label)
+    {
+        if (values is null)
+        {
+            return Array.Empty<int>();
+        }
+        if (values.Count > maximumCount)
+        {
+            throw new CompanionAnalysisException("payload_invalid", $"{label} is missing or exceeds the supported limit.");
+        }
+        foreach (var value in values) ValidateBoundedInt(value, 0, MaxConfigurationId, label);
+        return values.ToArray();
     }
 
     private static CompanionAnalysisTimelineV2 NormalizeTimeline(LcuTimelineDto timeline)

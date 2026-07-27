@@ -26,7 +26,8 @@ public sealed record LcuMatchDetailDto(
     string GameType,
     DateTimeOffset GameCreation,
     TimeSpan GameDuration,
-    IReadOnlyList<LcuMatchParticipantDto> Participants
+    IReadOnlyList<LcuMatchParticipantDto> Participants,
+    string? GameDataVersion = null
 );
 
 public sealed record LcuMatchParticipantDto(
@@ -45,7 +46,9 @@ public sealed record LcuMatchParticipantDto(
     double? TotalDamageTaken,
     double? TimeCCingOthers,
     double? TotalHealsOnTeammates,
-    double? TotalDamageShieldedOnTeammates
+    double? TotalDamageShieldedOnTeammates,
+    IReadOnlyList<int>? Items = null,
+    IReadOnlyList<int>? Augments = null
 );
 
 public sealed record LcuTimelineDto(

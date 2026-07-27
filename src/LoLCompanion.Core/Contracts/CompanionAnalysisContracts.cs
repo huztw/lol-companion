@@ -2,7 +2,7 @@ namespace LoLCompanion.Core.Contracts;
 
 public static class CompanionAnalysisContract
 {
-    public const int SchemaVersion = 2;
+    public const int SchemaVersion = 3;
     public const int MaxRequestBytes = 256 * 1024;
 }
 
@@ -42,10 +42,12 @@ public sealed record CompanionAnalysisParticipantV2(
     double? TotalDamageTaken,
     double? TimeCCingOthers,
     double? TotalHealsOnTeammates,
-    double? TotalDamageShieldedOnTeammates
+    double? TotalDamageShieldedOnTeammates,
+    IReadOnlyList<int> Items,
+    IReadOnlyList<int> Augments
 );
 
-public sealed record CompanionAnalysisMatchV2(string MatchId);
+public sealed record CompanionAnalysisMatchV2(string MatchId, string GameDataVersion);
 
 public sealed record CompanionAnalysisTimelineV2(
     IReadOnlyList<CompanionAnalysisTimelineFrameV2> Frames,

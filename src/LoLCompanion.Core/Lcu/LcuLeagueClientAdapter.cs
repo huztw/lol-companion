@@ -261,7 +261,9 @@ public sealed class LcuLeagueClientAdapter
                     TotalDamageTaken: TryGetDouble(stats, "totalDamageTaken"),
                     TimeCCingOthers: TryGetDouble(stats, "timeCCingOthers"),
                     TotalHealsOnTeammates: TryGetDouble(stats, "totalHealsOnTeammates"),
-                    TotalDamageShieldedOnTeammates: TryGetDouble(stats, "totalDamageShieldedOnTeammates")));
+                    TotalDamageShieldedOnTeammates: TryGetDouble(stats, "totalDamageShieldedOnTeammates"),
+                    Items: ReadConfigurationIds(stats, "item", 7),
+                    Augments: ReadConfigurationIds(stats, "playerAugment", 6, 1)));
             }
         }
         else
@@ -286,7 +288,9 @@ public sealed class LcuLeagueClientAdapter
                     TotalDamageTaken: TryGetDouble(participant, "totalDamageTaken"),
                     TimeCCingOthers: TryGetDouble(participant, "timeCCingOthers"),
                     TotalHealsOnTeammates: TryGetDouble(participant, "totalHealsOnTeammates"),
-                    TotalDamageShieldedOnTeammates: TryGetDouble(participant, "totalDamageShieldedOnTeammates")));
+                    TotalDamageShieldedOnTeammates: TryGetDouble(participant, "totalDamageShieldedOnTeammates"),
+                    Items: ReadConfigurationIds(participant, "item", 7),
+                    Augments: ReadConfigurationIds(participant, "playerAugment", 6, 1)));
             }
         }
 
@@ -297,7 +301,8 @@ public sealed class LcuLeagueClientAdapter
             GameType: root.GetProperty("gameType").GetString() ?? "UNKNOWN",
             GameCreation: DateTimeOffset.FromUnixTimeMilliseconds(root.GetProperty("gameCreation").GetInt64()),
             GameDuration: TimeSpan.FromSeconds(root.GetProperty("gameDuration").GetInt64()),
-            Participants: participants);
+            Participants: participants,
+            GameDataVersion: GetOptionalNonEmptyString(root, "gameVersion"));
     }
 
     private static JsonElement? GetParticipantIdentities(JsonElement root) =>
@@ -776,6 +781,18 @@ public sealed class LcuLeagueClientAdapter
 
     private static int? TryGetInt32(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out var property) && property.TryGetInt32(out var value) ? value : null;
+
+    private static IReadOnlyList<int>? ReadConfigurationIds(JsonElement source, string prefix, int count, int startIndex = 0)
+    {
+        var values = new List<int>();
+        foreach (var index in Enumerable.Range(startIndex, count))
+        {
+            var value = TryGetSafeInt32(source, $"{prefix}{index}");
+            if (!value.HasValue) return null;
+            values.Add(value.Value);
+        }
+        return values;
+    }
 
     private static bool GetRequiredBool(JsonElement element, string propertyName)
     {
