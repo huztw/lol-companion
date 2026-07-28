@@ -64,9 +64,21 @@ public sealed class CompanionApiClient
         throw await BuildApiExceptionAsync(response, cancellationToken);
     }
 
-    public async Task<CompanionAnalysisSubmitResponse> SubmitAnalysisAsync(string sessionToken, byte[] utf8Body, CancellationToken cancellationToken = default)
+    public async Task<CompanionAnalysisSubmitResponse> SubmitAnalysisAsync(
+        string sessionToken,
+        byte[] utf8Body,
+        CancellationToken cancellationToken = default,
+        string? controlJobId = null)
     {
         using var request = CreateAuthorizedRequest(HttpMethod.Post, "companion/analyses", sessionToken);
+        if (controlJobId is not null)
+        {
+            if (!Guid.TryParse(controlJobId, out _))
+            {
+                throw new ArgumentException("Control job id must be a UUID.", nameof(controlJobId));
+            }
+            request.Headers.Add("X-Companion-Control-Job-Id", controlJobId);
+        }
         request.Content = new ByteArrayContent(utf8Body);
         request.Content.Headers.ContentType = new("application/json")
         {
@@ -93,6 +105,25 @@ public sealed class CompanionApiClient
     {
         using var response = await _httpClient.GetAsync("companion/version", cancellationToken);
         return await ReadRequiredJsonAsync<CompanionVersionDtoV1>(response, cancellationToken);
+    }
+
+    public async Task<CompanionControlJobDto?> GetNextControlJobAsync(string sessionToken, CancellationToken cancellationToken = default)
+    {
+        using var request = CreateAuthorizedRequest(HttpMethod.Get, "companion/control/jobs/next", sessionToken);
+        request.Headers.Add("X-Companion-Remote-Control-Protocol", CompanionRemoteControlContract.ProtocolVersion);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (response.StatusCode == System.Net.HttpStatusCode.NoContent) return null;
+        return await ReadRequiredJsonAsync<CompanionControlJobDto>(response, cancellationToken);
+    }
+
+    public async Task SubmitControlResultAsync(string sessionToken, string controlJobId, CompanionControlResultDto result, CancellationToken cancellationToken = default)
+    {
+        if (!Guid.TryParse(controlJobId, out _)) throw new ArgumentException("Control job id must be a UUID.", nameof(controlJobId));
+        using var request = CreateAuthorizedRequest(HttpMethod.Post, $"companion/control/jobs/{Uri.EscapeDataString(controlJobId)}/result", sessionToken);
+        request.Headers.Add("X-Companion-Remote-Control-Protocol", CompanionRemoteControlContract.ProtocolVersion);
+        request.Content = JsonContent.Create(result, options: JsonOptions);
+        using var response = await _httpClient.SendAsync(request, cancellationToken);
+        if (!response.IsSuccessStatusCode) throw await BuildApiExceptionAsync(response, cancellationToken);
     }
 
     private static HttpRequestMessage CreateAuthorizedRequest(HttpMethod method, string path, string sessionToken)

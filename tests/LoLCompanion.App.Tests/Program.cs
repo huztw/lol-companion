@@ -61,20 +61,33 @@ catch (InvalidOperationException exception)
         "Expected error message to avoid echoing secret input.");
 }
 
-await TestRecentMatchesUiAsync();
 TestVersionDisplay();
-await TestRecentMatchesRecoveryAndCancellationAsync();
-await TestRecentMatchesNoOpRefreshAsync();
-await TestRecentMatchesSelectionPersistenceAsync();
-await TestTransientRecoverableErrorPreservesUiStateAsync();
-await TestClientUnavailableClearsListAndKeepsTerminalStatusAsync();
-await TestAnalysisRequiresPairingAsync();
-await TestAnalysisFlowAsync();
-await TestAnalysisDeliveryStateAsync();
-await TestAnalysisSchemaUpdateGuidanceAsync();
-await TestAnalysisCancellationAndDuplicatePreventionAsync();
+TestStatusOnlyRemoteControlUi();
 
 Console.WriteLine("LoL Companion app options tests passed.");
+
+static void TestStatusOnlyRemoteControlUi()
+{
+    using var form = CreateMainForm(
+        new FakeSessionManager(new CompanionSessionSnapshot(
+            DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+            "Arena Laptop",
+            "discord-user-1")),
+        _ => Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>([]));
+
+    Assert(
+        form.Controls.Find("recentMatchesListView", true).Length == 0,
+        "Expected local recent-match selection list to be absent.");
+    Assert(
+        form.Controls.Find("analyzeButton", true).Length == 0,
+        "Expected local analyze button to be absent.");
+    Assert(
+        FindControl<Label>(form, "analysisStatusValue").Text.Contains("等待 Discord", StringComparison.Ordinal),
+        "Expected Discord remote-control status guidance.");
+    Assert(
+        FindControl<Label>(form, "leagueClientStatusValue").Text.Contains("Discord", StringComparison.Ordinal),
+        "Expected on-demand League Client guidance.");
+}
 
 static void AssertInvalid(string value)
 {

@@ -89,7 +89,8 @@ public sealed record CompanionAnalysisStatusDtoV1(
 public sealed record CompanionVersionDtoV1(
     int SchemaVersion,
     CompanionDownloadContract Current,
-    CompanionAnalysisCompatibilityContract? Analysis
+    CompanionAnalysisCompatibilityContract? Analysis,
+    CompanionRemoteControlCompatibilityContract? RemoteControl = null
 );
 
 public sealed record CompanionAnalysisCompatibilityContract(

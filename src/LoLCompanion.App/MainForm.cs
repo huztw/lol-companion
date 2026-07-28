@@ -6,6 +6,7 @@ using LoLCompanion.Core.Analysis;
 using LoLCompanion.Core.Api;
 using LoLCompanion.Core.Pairing;
 using LoLCompanion.Core.Lcu;
+using LoLCompanion.Core.RemoteControl;
 
 namespace LoLCompanion.App;
 
@@ -20,6 +21,7 @@ public sealed class MainForm : Form
 
     private readonly ICompanionSessionManager _sessionManager;
     private readonly CompanionPairingController _pairingController;
+    private readonly CompanionRemoteControlCoordinator? _remoteControlCoordinator;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly Label _pairingStatusValue;
     private readonly Label _sessionStatusValue;
@@ -48,10 +50,12 @@ public sealed class MainForm : Form
         ICompanionSessionManager sessionManager,
         CompanionPairingController pairingController,
         Func<CancellationToken, Task<IReadOnlyList<LcuRecentMatchSummary>>>? recentMatchesLoader = null,
-        Func<LcuRecentMatchSummary, CancellationToken, Task<CompanionAnalysisWorkflowResult>>? analyzeSelectedMatch = null)
+        Func<LcuRecentMatchSummary, CancellationToken, Task<CompanionAnalysisWorkflowResult>>? analyzeSelectedMatch = null,
+        CompanionRemoteControlCoordinator? remoteControlCoordinator = null)
     {
         _sessionManager = sessionManager ?? throw new ArgumentNullException(nameof(sessionManager));
         _pairingController = pairingController ?? throw new ArgumentNullException(nameof(pairingController));
+        _remoteControlCoordinator = remoteControlCoordinator;
         _recentMatchesLoader = recentMatchesLoader ?? (_ => Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>(Array.Empty<LcuRecentMatchSummary>()));
         _analyzeSelectedMatch = analyzeSelectedMatch ?? ThrowAnalysisNotConfigured;
         _refreshTimer = new System.Windows.Forms.Timer { Interval = 2500 };
@@ -224,7 +228,7 @@ public sealed class MainForm : Form
         {
             AutoSize = true,
             Dock = DockStyle.Fill,
-            Text = "近期對戰",
+            Text = "Discord 遠端控制",
             Font = new Font(Font, FontStyle.Bold),
             Padding = new Padding(0, 8, 0, 6)
         }, 0, 0);
@@ -249,8 +253,8 @@ public sealed class MainForm : Form
         _analysisStatusValue.Name = "analysisStatusValue";
         analysisPanel.Controls.Add(_analyzeButton, 0, 0);
         analysisPanel.Controls.Add(_analysisStatusValue, 1, 0);
-        recentMatchesPanel.Controls.Add(analysisPanel, 0, 1);
-        recentMatchesPanel.Controls.Add(_recentMatchesListView, 0, 2);
+        _analysisStatusValue.Padding = new Padding(0, 8, 0, 0);
+        recentMatchesPanel.Controls.Add(_analysisStatusValue, 0, 1);
 
         var content = new TableLayoutPanel
         {
@@ -269,11 +273,16 @@ public sealed class MainForm : Form
 
         RefreshSessionStatus();
         UpdatePairingUi(false, " ");
-        SetLeagueClientUnavailable("請先啟動 League Client，連線後將自動載入。");
-        UpdateAnalysisUi();
+        _leagueClientStatusValue.Text = "需要分析時會由 Discord 指令連接 League Client。";
+        _analysisStatusValue.Text = _sessionManager.GetActiveSession() is null
+            ? "請先完成 Discord 配對。"
+            : "等待 Discord 指令。";
         Load += OnLoad;
         FormClosing += OnFormClosing;
-        _refreshTimer.Tick += OnRefreshTimerTick;
+        if (_remoteControlCoordinator is not null)
+        {
+            _remoteControlCoordinator.StatusChanged += OnRemoteControlStatusChanged;
+        }
     }
 
     public async Task RefreshLeagueClientAsync(CancellationToken cancellationToken = default)
@@ -338,7 +347,14 @@ public sealed class MainForm : Form
             _expiresValue.Text = "沒有有效工作階段";
             _discordUserValue.Text = "-";
             _deviceValue.Text = "-";
-            UpdateAnalysisUi();
+            if (_remoteControlCoordinator is not null)
+            {
+                _analysisStatusValue.Text = "請先完成 Discord 配對。";
+            }
+            else
+            {
+                UpdateAnalysisUi();
+            }
             return;
         }
 
@@ -347,7 +363,14 @@ public sealed class MainForm : Form
         _expiresValue.Text = session.ExpiresAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss");
         _discordUserValue.Text = session.DiscordUserId;
         _deviceValue.Text = session.DeviceName;
-        UpdateAnalysisUi();
+        if (_remoteControlCoordinator is not null)
+        {
+            _analysisStatusValue.Text = "等待 Discord 指令。";
+        }
+        else
+        {
+            UpdateAnalysisUi();
+        }
     }
 
     private async void OnPairButtonClickAsync(object? sender, EventArgs e)
@@ -398,22 +421,41 @@ public sealed class MainForm : Form
     private void OnFormClosing(object? sender, FormClosingEventArgs e)
     {
         _lifetimeCancellation.Cancel();
-        _refreshTimer.Stop();
     }
 
     private async void OnLoad(object? sender, EventArgs e)
     {
+        if (_remoteControlCoordinator is null)
+        {
+            return;
+        }
         try
         {
-            await RefreshLeagueClientAsync(_lifetimeCancellation.Token);
-            if (!_disposed && !IsDisposed)
-            {
-                _refreshTimer.Start();
-            }
+            await _remoteControlCoordinator.RunAsync(_lifetimeCancellation.Token);
         }
         catch (OperationCanceledException) when (_lifetimeCancellation.IsCancellationRequested || _disposed || IsDisposed)
         {
         }
+    }
+
+    private void OnRemoteControlStatusChanged(CompanionRemoteControlStatus status)
+    {
+        RunOnUiThread(() =>
+        {
+            _analysisStatusValue.Text = status.Message;
+            if (status.State is "listing" or "analyzing" or "waiting_selection" or "completed")
+            {
+                _leagueClientStatusValue.Text = "League Client 已回應遠端分析流程。";
+            }
+            else if (status.State == "failed")
+            {
+                _leagueClientStatusValue.Text = "League Client 或遠端分析暫時不可用。";
+            }
+            else if (status.State == "unauthorized")
+            {
+                RefreshSessionStatus();
+            }
+        });
     }
 
     private async void OnRefreshTimerTick(object? sender, EventArgs e)
@@ -867,6 +909,10 @@ public sealed class MainForm : Form
         if (disposing && !_disposed)
         {
             _disposed = true;
+            if (_remoteControlCoordinator is not null)
+            {
+                _remoteControlCoordinator.StatusChanged -= OnRemoteControlStatusChanged;
+            }
             _lifetimeCancellation.Cancel();
             _lifetimeCancellation.Dispose();
         }

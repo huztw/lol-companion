@@ -6,6 +6,7 @@ using LoLCompanion.Core.Analysis;
 using LoLCompanion.Core.Api;
 using LoLCompanion.Core.Contracts;
 using LoLCompanion.Core.Lcu;
+using LoLCompanion.Core.RemoteControl;
 
 await TestLockfileParserAsync();
 await TestDiscoveryAsync();
@@ -29,6 +30,8 @@ await TestCompanionSessionManagerAsync();
 await TestCompanionApiClientAsync();
 await TestCompanionPairingControllerAsync();
 await TestCompanionAnalysisWorkflowAsync();
+await TestRemoteControlCoordinatorAsync();
+await TestRemoteControlAnalyzeSubmissionAsync();
 
 Console.WriteLine("LoL Companion core adapter tests passed.");
 
@@ -1476,16 +1479,198 @@ static async Task TestCompanionAnalysisWorkflowAsync()
 
     await sessionManager.RedeemAsync(new CompanionApiClient(new HttpClient(new SessionHandler()) { BaseAddress = new Uri("https://companion.local/") }), new PairRedeemRequest("ABC-123", "Lab PC"));
 
-    var result = await workflow.AnalyzeSelectedMatchAsync(new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T10:00:00Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null));
+    var selectedMatch = new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T10:00:00Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null);
+    var result = await workflow.AnalyzeSelectedMatchAsync(selectedMatch);
     Assert(result.RequestId == "11111111-1111-4111-8111-111111111111", "Expected workflow to reuse the same request id.");
     Assert(attempts == 2, "Expected exactly two upload attempts.");
     Assert(requestIds.Distinct().Count() == 1, "Expected upload retries to reuse the same request id.");
     Assert(result.FinalStatus.State == "completed", "Expected polling to terminate on completed state.");
     Assert(result.Events.Any(ev => ev.Kind == "observed" && ev.State == "processing"), "Expected polling events to be captured.");
 
+    var statusPolls = 0;
+    var submitOnlyHandler = new RecordingHandler((request, _) =>
+    {
+        var path = request.RequestUri?.AbsolutePath;
+        if (path == "/companion/version")
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"schemaVersion":1,"analysis":{"currentSchemaVersion":4,"minimumSchemaVersion":4}}""", Encoding.UTF8, "application/json")
+            };
+        }
+        if (path == "/companion/analyses" && request.Method == HttpMethod.Post)
+        {
+            Assert(
+                request.Headers.TryGetValues("X-Companion-Control-Job-Id", out var values) &&
+                values.Single() == "22222222-2222-4222-8222-222222222222",
+                "Expected submit-only workflow to send the server-issued control job id.");
+            return new HttpResponseMessage(HttpStatusCode.Accepted)
+            {
+                Content = new StringContent("""{"jobId":"job-submit-only","duplicate":false}""", Encoding.UTF8, "application/json")
+            };
+        }
+        if (path?.StartsWith("/companion/analyses/", StringComparison.Ordinal) == true)
+        {
+            statusPolls++;
+        }
+        throw new InvalidOperationException($"Unexpected submit-only path: {path}");
+    });
+    var submitOnlyWorkflow = new CompanionAnalysisWorkflow(
+        source,
+        new CompanionApiClient(new HttpClient(submitOnlyHandler) { BaseAddress = new Uri("https://companion.local/") }),
+        sessionManager,
+        new CompanionAnalysisNormalizer());
+    var submission = await submitOnlyWorkflow.SubmitSelectedMatchAsync(
+        selectedMatch,
+        "22222222-2222-4222-8222-222222222222");
+    Assert(submission.JobId == "job-submit-only", "Expected remote workflow to return after analysis submission.");
+    Assert(statusPolls == 0, "Remote workflow must not wait for analysis terminal state inside the 60-second control job.");
+
     using var cts = new CancellationTokenSource();
     cts.Cancel();
-    await AssertThrowsAsync<OperationCanceledException>(() => workflow.AnalyzeSelectedMatchAsync(new LcuRecentMatchSummary(431945471, 450, "ARAM", "MATCHED", DateTimeOffset.Parse("2026-07-25T10:00:00Z"), TimeSpan.FromMinutes(23), true, 1, "Annie", 8, 2, 10, true, null), cts.Token), "Expected cancellation to flow.");
+    await AssertThrowsAsync<OperationCanceledException>(() => workflow.AnalyzeSelectedMatchAsync(selectedMatch, cancellationToken: cts.Token), "Expected cancellation to flow.");
+}
+
+static async Task TestRemoteControlCoordinatorAsync()
+{
+    string? submittedBody = null;
+    var controlJobId = "22222222-2222-4222-8222-222222222222";
+    var handler = new RecordingHandler(async (request, cancellationToken) =>
+    {
+        var path = request.RequestUri?.AbsolutePath;
+        if (path == "/companion/pair/redeem")
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"sessionToken":"session-token","expiresAt":"2099-07-28T00:00:00Z","deviceName":"Test PC","discordUserId":"owner-1"}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+        if (path == "/companion/control/jobs/next")
+        {
+            Assert(
+                request.Headers.TryGetValues("X-Companion-Remote-Control-Protocol", out var values) &&
+                values.Single() == "remote-control-v1",
+                "Expected remote-control protocol header.");
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$"""{"protocolVersion":"remote-control-v1","controlJobId":"{{controlJobId}}","type":"list_recent_matches"}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+        if (path == $"/companion/control/jobs/{controlJobId}/result")
+        {
+            submittedBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json")
+            };
+        }
+        throw new InvalidOperationException($"Unexpected path: {path}");
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://example.test/") };
+    var api = new CompanionApiClient(httpClient);
+    var sessions = new InMemoryCompanionSessionManager();
+    await sessions.RedeemAsync(api, new PairRedeemRequest("ABC-DEF-GHJ", "Test PC"));
+    var statuses = new List<string>();
+    var matches = Enumerable.Range(1, 25)
+        .Select(index => new LcuRecentMatchSummary(
+            1_000 + index,
+            450,
+            "ARAM",
+            "MATCHED_GAME",
+            DateTimeOffset.Parse("2026-07-28T00:00:00Z"),
+            TimeSpan.FromSeconds(1_000 + index),
+            index % 2 == 0,
+            index,
+            $"Champion {index}",
+            index,
+            index,
+            index,
+            true,
+            null))
+        .ToArray();
+    var coordinator = new CompanionRemoteControlCoordinator(
+        api,
+        sessions,
+        _ => Task.FromResult<IReadOnlyList<LcuRecentMatchSummary>>(matches),
+        (_, _, _) => throw new InvalidOperationException("Analysis should not run for list jobs."),
+        pollInterval: TimeSpan.Zero);
+    coordinator.StatusChanged += status => statuses.Add(status.State);
+
+    await coordinator.PollOnceAsync();
+
+    Assert(submittedBody is not null, "Expected list result submission.");
+    using var submitted = JsonDocument.Parse(submittedBody!);
+    var submittedMatches = submitted.RootElement.GetProperty("matches");
+    Assert(submittedMatches.GetArrayLength() == 20, "Expected recent list to be capped at 20.");
+    Assert(submittedMatches[0].TryGetProperty("durationSeconds", out _), "Expected seconds-based duration field.");
+    Assert(submittedMatches[0].TryGetProperty("supported", out _), "Expected bounded supported field.");
+    Assert(statuses.Contains("listing") && statuses.Contains("waiting_selection"), "Expected remote-control status events.");
+}
+
+static async Task TestRemoteControlAnalyzeSubmissionAsync()
+{
+    string? submittedBody = null;
+    var controlJobId = "33333333-3333-4333-8333-333333333333";
+    var handler = new RecordingHandler(async (request, cancellationToken) =>
+    {
+        var path = request.RequestUri?.AbsolutePath;
+        if (path == "/companion/pair/redeem")
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"sessionToken":"session-token","expiresAt":"2099-07-28T00:00:00Z","deviceName":"Test PC","discordUserId":"owner-1"}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+        if (path == "/companion/control/jobs/next")
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    $$$"""{"protocolVersion":"remote-control-v1","controlJobId":"{{{controlJobId}}}","type":"analyze_match","gameId":431945471,"queueId":450,"gameMode":"ARAM","gameType":"MATCHED_GAME","createdAt":"2026-07-28T00:00:00Z","durationSeconds":1200,"win":true,"championId":1,"championName":"Annie","kills":8,"deaths":2,"assists":10,"isSupported":true}""",
+                    Encoding.UTF8,
+                    "application/json")
+            };
+        }
+        if (path == $"/companion/control/jobs/{controlJobId}/result")
+        {
+            submittedBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json")
+            };
+        }
+        throw new InvalidOperationException($"Unexpected path: {path}");
+    });
+    using var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://example.test/") };
+    var api = new CompanionApiClient(httpClient);
+    var sessions = new InMemoryCompanionSessionManager();
+    await sessions.RedeemAsync(api, new PairRedeemRequest("ABC-DEF-GHJ", "Test PC"));
+    var statuses = new List<string>();
+    var coordinator = new CompanionRemoteControlCoordinator(
+        api,
+        sessions,
+        _ => throw new InvalidOperationException("Recent matches should not load for analyze jobs."),
+        (_, requestId, _) => Task.FromResult(new CompanionAnalysisSubmissionResult(
+            requestId,
+            "analysis-job-1",
+            false,
+            [])),
+        pollInterval: TimeSpan.Zero);
+    coordinator.StatusChanged += status => statuses.Add(status.State);
+
+    await coordinator.PollOnceAsync();
+
+    Assert(submittedBody?.Contains("\"analysisJobId\":\"analysis-job-1\"", StringComparison.Ordinal) == true, "Expected control completion immediately after analysis submission.");
+    Assert(statuses.Contains("analyzing") && statuses.Contains("submitted"), "Expected remote analysis to report submitted instead of terminal completion.");
 }
 
 static LcuLeagueClientAdapter CreateAdapter(

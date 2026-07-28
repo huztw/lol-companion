@@ -1,0 +1,51 @@
+{
+  "protocolVersion": "remote-control-v1",
+  "listJob": {
+    "protocolVersion": "remote-control-v1",
+    "controlJobId": "22222222-2222-4222-8222-222222222222",
+    "type": "list_recent_matches"
+  },
+  "analyzeJob": {
+    "protocolVersion": "remote-control-v1",
+    "controlJobId": "33333333-3333-4333-8333-333333333333",
+    "type": "analyze_match",
+    "gameId": 431945471,
+    "queueId": 450,
+    "gameMode": "ARAM",
+    "gameType": "MATCHED_GAME",
+    "createdAt": "2026-07-25T10:00:00Z",
+    "durationSeconds": 1200,
+    "win": true,
+    "championId": 1,
+    "championName": "Annie",
+    "kills": 8,
+    "deaths": 2,
+    "assists": 10,
+    "isSupported": true,
+    "unsupportedReason": null
+  },
+  "listResult": {
+    "state": "completed",
+    "failureCategory": null,
+    "message": null,
+    "matches": [
+      {
+        "gameId": 431945471,
+        "queueId": 450,
+        "gameMode": "ARAM",
+        "gameType": "MATCHED_GAME",
+        "createdAt": "2026-07-25T10:00:00Z",
+        "durationSeconds": 1200,
+        "win": true,
+        "championId": 1,
+        "championName": "Annie",
+        "kills": 8,
+        "deaths": 2,
+        "assists": 10,
+        "supported": true,
+        "unsupportedReason": null
+      }
+    ],
+    "analysisJobId": null
+  }
+}

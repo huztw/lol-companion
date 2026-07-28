@@ -47,6 +47,13 @@ public sealed record CompanionAnalysisWorkflowResult(
     IReadOnlyList<CompanionAnalysisWorkflowEvent> Events
 );
 
+public sealed record CompanionAnalysisSubmissionResult(
+    string RequestId,
+    string JobId,
+    bool Duplicate,
+    IReadOnlyList<CompanionAnalysisWorkflowEvent> Events
+);
+
 public sealed class CompanionAnalysisWorkflow
 {
     private readonly ICompanionLeagueAnalysisSource _leagueSource;
@@ -80,7 +87,55 @@ public sealed class CompanionAnalysisWorkflow
 
     public async Task<CompanionAnalysisWorkflowResult> AnalyzeSelectedMatchAsync(
         LcuRecentMatchSummary selectedMatch,
+        string? serverRequestId = null,
         CancellationToken cancellationToken = default)
+    {
+        var submission = await SubmitSelectedMatchCoreAsync(selectedMatch, serverRequestId, cancellationToken);
+        var finalStatus = await PollUntilTerminalAsync(
+            submission.JobId,
+            submission.Events,
+            cancellationToken);
+
+        return new CompanionAnalysisWorkflowResult(
+            submission.RequestId,
+            submission.JobId,
+            submission.Duplicate,
+            finalStatus,
+            submission.Events);
+    }
+
+    public async Task<CompanionAnalysisSubmissionResult> SubmitSelectedMatchAsync(
+        LcuRecentMatchSummary selectedMatch,
+        string serverRequestId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(serverRequestId))
+        {
+            throw new CompanionAnalysisException(
+                "invalid_request_id",
+                "Remote analysis requires a server-issued request id.",
+                false);
+        }
+
+        var submission = await SubmitSelectedMatchCoreAsync(
+            selectedMatch,
+            serverRequestId,
+            cancellationToken);
+        return new CompanionAnalysisSubmissionResult(
+            submission.RequestId,
+            submission.JobId,
+            submission.Duplicate,
+            submission.Events);
+    }
+
+    private async Task<(
+        string RequestId,
+        string JobId,
+        bool Duplicate,
+        List<CompanionAnalysisWorkflowEvent> Events)> SubmitSelectedMatchCoreAsync(
+        LcuRecentMatchSummary selectedMatch,
+        string? serverRequestId,
+        CancellationToken cancellationToken)
     {
         var events = new List<CompanionAnalysisWorkflowEvent>();
 
@@ -116,7 +171,8 @@ public sealed class CompanionAnalysisWorkflow
 
         events.Add(new CompanionAnalysisWorkflowEvent("started", "normalize", 0));
         var payload = _normalizer.Normalize(currentSummoner, selectedMatch, matchDetail, timeline);
-        var requestId = _requestIdFactory().ToString();
+        var requestId = serverRequestId ?? _requestIdFactory().ToString();
+        if (!Guid.TryParse(requestId, out _)) throw new CompanionAnalysisException("invalid_request_id", "Analysis request id must be a server-issued UUID.", false);
         var request = new CompanionAnalysisSubmitRequest(
             requestId,
             selectedMatch.GameId,
@@ -126,17 +182,21 @@ public sealed class CompanionAnalysisWorkflow
         );
         var utf8Body = _normalizer.SerializeRequest(request);
 
-        CompanionAnalysisSubmitResponse submitResponse = await SubmitWithRetryAsync(requestId, utf8Body, events, cancellationToken);
-        var finalStatus = await PollUntilTerminalAsync(submitResponse.JobId, events, cancellationToken);
-
-        return new CompanionAnalysisWorkflowResult(requestId, submitResponse.JobId, submitResponse.Duplicate, finalStatus, events);
+        CompanionAnalysisSubmitResponse submitResponse = await SubmitWithRetryAsync(
+            requestId,
+            utf8Body,
+            events,
+            cancellationToken,
+            serverRequestId);
+        return (requestId, submitResponse.JobId, submitResponse.Duplicate, events);
     }
 
     private async Task<CompanionAnalysisSubmitResponse> SubmitWithRetryAsync(
         string requestId,
         byte[] utf8Body,
         List<CompanionAnalysisWorkflowEvent> events,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? controlJobId)
     {
         for (var attempt = 1; attempt <= _options.MaxUploadAttempts; attempt++)
         {
@@ -145,7 +205,11 @@ public sealed class CompanionAnalysisWorkflow
 
             try
             {
-                var response = await _apiClient.SubmitAnalysisAsync(sessionToken, utf8Body, cancellationToken);
+                var response = await _apiClient.SubmitAnalysisAsync(
+                    sessionToken,
+                    utf8Body,
+                    cancellationToken,
+                    controlJobId);
                 events.Add(new CompanionAnalysisWorkflowEvent("completed", "upload", attempt, response.JobId));
                 return response;
             }

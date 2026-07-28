@@ -4,6 +4,7 @@ using LoLCompanion.Core.Analysis;
 using LoLCompanion.Core.Api;
 using LoLCompanion.Core.Pairing;
 using LoLCompanion.Core.Lcu;
+using LoLCompanion.Core.RemoteControl;
 
 namespace LoLCompanion.App;
 
@@ -32,12 +33,17 @@ internal static class Program
             apiClient,
             sessionManager,
             new CompanionAnalysisNormalizer());
+        var remoteControlCoordinator = new CompanionRemoteControlCoordinator(
+            apiClient,
+            sessionManager,
+            lcuAdapter.GetRecentMatchesAsync,
+            (match, controlJobId, cancellationToken) =>
+                analysisWorkflow.SubmitSelectedMatchAsync(match, controlJobId, cancellationToken));
 
         Application.Run(new MainForm(
             sessionManager,
             pairingController,
-            lcuAdapter.GetRecentMatchesAsync,
-            analysisWorkflow.AnalyzeSelectedMatchAsync));
+            remoteControlCoordinator: remoteControlCoordinator));
     }
 
     private sealed class LcuAnalysisSourceAdapter : ICompanionLeagueAnalysisSource

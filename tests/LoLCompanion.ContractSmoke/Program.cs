@@ -19,9 +19,38 @@ var submitFixturePath = Path.GetFullPath(Path.Combine(
     "fixtures", "companion-analysis-request-v4.json"));
 var submitBody = await File.ReadAllBytesAsync(submitFixturePath);
 using var submitDocument = JsonDocument.Parse(submitBody);
-var submit = await client.SubmitAnalysisAsync("session-token-2", submitBody);
+var serverIssuedControlJobId = submitDocument.RootElement.GetProperty("requestId").GetString()
+    ?? throw new InvalidOperationException("Expected fixture requestId.");
+var submit = await client.SubmitAnalysisAsync(
+    "session-token-2",
+    submitBody,
+    controlJobId: serverIssuedControlJobId);
 var status = await client.GetAnalysisStatusAsync("session-token-2", "job/with spaces?=yes", default);
 var version = await client.GetVersionAsync();
+var controlJob = await client.GetNextControlJobAsync("session-token-2");
+await client.SubmitControlResultAsync(
+    "session-token-2",
+    controlJob!.ControlJobId,
+    new CompanionControlResultDto(
+        "completed",
+        Matches:
+        [
+            new CompanionRecentMatchDto(
+                431945471,
+                450,
+                "ARAM",
+                "MATCHED_GAME",
+                DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
+                1200,
+                true,
+                1,
+                "Annie",
+                8,
+                2,
+                10,
+                true,
+                null)
+        ]));
 
 Assert(handler.Requests[0].RequestUri?.ToString() == "https://companion.local/companion/pair/redeem", "Expected redeem endpoint path.");
 Assert(handler.Requests[0].Body?.Contains("\"pairCode\":\"ABC-DEF-GHJ\"") == true, "Expected pairCode JSON field.");
@@ -34,6 +63,7 @@ Assert(handler.Requests[2].Authorization == "Bearer session-token-1", "Expected 
 Assert(handler.Requests[3].RequestUri?.ToString() == "https://companion.local/companion/analyses", "Expected submit endpoint path.");
 Assert(handler.Requests[3].Method == HttpMethod.Post, "Expected POST for submit.");
 Assert(handler.Requests[3].Authorization == "Bearer session-token-2", "Expected bearer token on submit.");
+Assert(handler.Requests[3].ControlJobId == serverIssuedControlJobId, "Expected analysis upload to carry the server-issued control job id.");
 Assert(handler.Requests[3].ContentType == "application/json; charset=utf-8", "Expected JSON utf-8 content type on submit.");
 Assert(handler.Requests[3].Body == Encoding.UTF8.GetString(submitBody), "Expected submit body to pass through unchanged.");
 Assert(submitDocument.RootElement.GetProperty("schemaVersion").GetInt32() == 4, "Expected shared schema 4 fixture.");
@@ -44,7 +74,13 @@ Assert(handler.Requests[4].Method == HttpMethod.Get, "Expected GET for status.")
 Assert(handler.Requests[4].Authorization == "Bearer session-token-2", "Expected bearer token on status.");
 Assert(handler.Requests[5].RequestUri?.ToString() == "https://companion.local/companion/version", "Expected version endpoint path.");
 Assert(handler.Requests[5].Authorization is null, "Expected version endpoint to be anonymous.");
-Assert(handler.Requests.Count == 6, "Expected no additional companion API requests.");
+Assert(handler.Requests[6].RequestUri?.AbsolutePath == "/companion/control/jobs/next", "Expected remote-control poll endpoint.");
+Assert(handler.Requests[6].Authorization == "Bearer session-token-2", "Expected bearer token on control poll.");
+Assert(handler.Requests[6].ProtocolVersion == "remote-control-v1", "Expected protocol header on control poll.");
+Assert(handler.Requests[7].RequestUri?.AbsolutePath == $"/companion/control/jobs/{controlJob.ControlJobId}/result", "Expected control result endpoint.");
+Assert(handler.Requests[7].Body?.Contains("\"durationSeconds\":1200", StringComparison.Ordinal) == true, "Expected seconds-based duration contract.");
+Assert(handler.Requests[7].Body?.Contains("\"supported\":true", StringComparison.Ordinal) == true, "Expected supported match whitelist field.");
+Assert(handler.Requests.Count == 8, "Expected no additional companion API requests.");
 Assert(response.DeviceName == "Tournament Laptop", "Expected response device name.");
 Assert(response.DiscordUserId == "discord-user-1", "Expected response Discord user id.");
 Assert(response.SessionToken == "session-token-1", "Expected response session token.");
@@ -62,6 +98,26 @@ Assert(version.Current.DownloadUrl == "https://example.com/Companion.zip", "Expe
 Assert(version.Current.Sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "Expected sha256 checksum.");
 Assert(version.Analysis?.CurrentSchemaVersion == 4, "Expected current analysis schema version.");
 Assert(version.Analysis?.MinimumSchemaVersion == 4, "Expected minimum analysis schema version.");
+Assert(version.RemoteControl?.CurrentProtocolVersion == "remote-control-v1", "Expected current remote-control protocol.");
+Assert(version.RemoteControl?.MinimumProtocolVersion == "remote-control-v1", "Expected minimum remote-control protocol.");
+Assert(version.RemoteControl?.PollIntervalSeconds == 15, "Expected 15-second poll interval.");
+Assert(controlJob.Type == "list_recent_matches", "Expected list recent matches control job.");
+
+var controlFixturePath = Path.GetFullPath(Path.Combine(
+    AppContext.BaseDirectory, "..", "..", "..", "..",
+    "fixtures", "companion-control-v1.json"));
+using var controlFixture = JsonDocument.Parse(await File.ReadAllBytesAsync(controlFixturePath));
+var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+var fixtureAnalyzeJob = controlFixture.RootElement
+    .GetProperty("analyzeJob")
+    .Deserialize<CompanionControlJobDto>(jsonOptions);
+var fixtureListResult = controlFixture.RootElement
+    .GetProperty("listResult")
+    .Deserialize<CompanionControlResultDto>(jsonOptions);
+Assert(fixtureAnalyzeJob?.DurationSeconds == 1200, "Expected shared analyze job durationSeconds.");
+Assert(fixtureAnalyzeJob?.IsSupported is true, "Expected shared analyze job support flag.");
+Assert(fixtureListResult?.Matches?.Single().DurationSeconds == 1200, "Expected shared list result durationSeconds.");
+Assert(fixtureListResult?.Matches?.Single().Supported is true, "Expected shared list result supported flag.");
 
 Console.WriteLine("LoL Companion contract smoke passed.");
 
@@ -84,7 +140,13 @@ sealed class FakeHandler : HttpMessageHandler
             request.RequestUri,
             request.Headers.Authorization?.ToString(),
             request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken),
-            request.Content?.Headers.ContentType?.ToString()
+            request.Content?.Headers.ContentType?.ToString(),
+            request.Headers.TryGetValues("X-Companion-Remote-Control-Protocol", out var protocolValues)
+                ? protocolValues.SingleOrDefault()
+                : null,
+            request.Headers.TryGetValues("X-Companion-Control-Job-Id", out var controlJobValues)
+                ? controlJobValues.SingleOrDefault()
+                : null
         ));
 
         if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/companion/sessions/current")
@@ -137,6 +199,11 @@ sealed class FakeHandler : HttpMessageHandler
               "analysis": {
                 "currentSchemaVersion": 4,
                 "minimumSchemaVersion": 4
+              },
+              "remoteControl": {
+                "currentProtocolVersion": "remote-control-v1",
+                "minimumProtocolVersion": "remote-control-v1",
+                "pollIntervalSeconds": 15
               }
             }
             """;
@@ -144,6 +211,32 @@ sealed class FakeHandler : HttpMessageHandler
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(versionJson, Encoding.UTF8, "application/json")
+            };
+        }
+
+        if (request.Method == HttpMethod.Get && request.RequestUri?.AbsolutePath == "/companion/control/jobs/next")
+        {
+            var controlJson = """
+            {
+              "protocolVersion": "remote-control-v1",
+              "controlJobId": "11111111-1111-4111-8111-111111111111",
+              "type": "list_recent_matches"
+            }
+            """;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(controlJson, Encoding.UTF8, "application/json")
+            };
+        }
+
+        if (
+            request.Method == HttpMethod.Post &&
+            request.RequestUri?.AbsolutePath.StartsWith("/companion/control/jobs/", StringComparison.Ordinal) == true
+        )
+        {
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"ok":true}""", Encoding.UTF8, "application/json")
             };
         }
 
@@ -183,4 +276,11 @@ sealed class FakeHandler : HttpMessageHandler
     }
 }
 
-sealed record FakeRequest(HttpMethod Method, Uri? RequestUri, string? Authorization, string? Body, string? ContentType);
+sealed record FakeRequest(
+    HttpMethod Method,
+    Uri? RequestUri,
+    string? Authorization,
+    string? Body,
+    string? ContentType,
+    string? ProtocolVersion,
+    string? ControlJobId);
