@@ -1,10 +1,10 @@
-# LoL Companion v0.1.0-alpha.7
+# LoL Companion v0.1.0-alpha.8
 
 LoL Companion 是一個 Windows 桌面資料橋接工具。完成 Discord 配對後，它會在本機等待 Discord 指令、連接 League Client 並把使用者選定對局的分析資料安全送回 Bot。
 
 ## 目前版本範圍
 
-- `v0.1.0-alpha.7`
+- `v0.1.0-alpha.8`
 - 支援 Discord 配對與 2 小時 memory-only session
 - 支援由 Discord `/analyze` 取得並顯示最近 20 場對戰
 - 支援從手機或電腦 Discord 選取對局，再由 Companion 讀取本機資料並送出分析

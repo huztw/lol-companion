@@ -6,7 +6,7 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>0.1.0-alpha.7</Version>
+    <Version>0.1.0-alpha.8</Version>
   </PropertyGroup>
 
   <ItemGroup>
