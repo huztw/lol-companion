@@ -1,0 +1,190 @@
+name: Release Companion
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/LoLCompanion.App/LoLCompanion.App.csproj
+      - .github/workflows/release-companion.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-companion
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Companion
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        run: |
+          $projectPath = "src/LoLCompanion.App/LoLCompanion.App.csproj"
+          [xml]$project = Get-Content -LiteralPath $projectPath -Raw
+          $versionNode = $project.SelectSingleNode("/Project/PropertyGroup/Version")
+
+          if ($null -eq $versionNode -or [string]::IsNullOrWhiteSpace($versionNode.InnerText)) {
+            throw "Unable to resolve Version from $projectPath"
+          }
+
+          $version = $versionNode.InnerText.Trim()
+          $tag = "v$version"
+          $isPrerelease = $version.Contains("-").ToString().ToLowerInvariant()
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
+          "is_prerelease=$isPrerelease" >> $env:GITHUB_OUTPUT
+
+      - name: Check out exact release tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git fetch --tags --force
+
+          if ([string]::IsNullOrWhiteSpace((git tag --list $env:RELEASE_TAG))) {
+            throw "Release tag $env:RELEASE_TAG does not exist."
+          }
+
+          git checkout --detach $env:RELEASE_TAG
+
+      - name: Verify Companion
+        shell: pwsh
+        run: |
+          dotnet test tests/LoLCompanion.Core.Tests/LoLCompanion.Core.Tests.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          dotnet test tests/LoLCompanion.App.Tests/LoLCompanion.App.Tests.csproj -c Release --nologo
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          dotnet run --project tests/LoLCompanion.ContractSmoke/LoLCompanion.ContractSmoke.csproj -c Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build portable Windows package
+        id: package
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $publishDirectory = Join-Path $env:RUNNER_TEMP "lol-companion-publish"
+          $zipPath = Join-Path $env:RUNNER_TEMP "LoLCompanion-v$env:RELEASE_VERSION-win-x64.zip"
+
+          dotnet publish src/LoLCompanion.App/LoLCompanion.App.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:DebugType=None `
+            -p:DebugSymbols=false `
+            -o $publishDirectory `
+            --nologo
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $executable = Join-Path $publishDirectory "LoLCompanion.App.exe"
+          if (-not (Test-Path -LiteralPath $executable)) {
+            throw "Published executable was not found at $executable"
+          }
+
+          Compress-Archive -LiteralPath $executable -DestinationPath $zipPath
+          $sha256 = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash
+
+          "zip_path=$zipPath" >> $env:GITHUB_OUTPUT
+          "sha256=$sha256" >> $env:GITHUB_OUTPUT
+
+      - name: Write release notes
+        id: notes
+        shell: pwsh
+        env:
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          @"
+          ## 本版重點
+
+          - 新增動態角色定位所需的裝備變化與對局統計欄位。
+          - 分析契約維持 schema 4，補齊角色能力池與實際打法判斷所需資料。
+          - 加強 Companion 與 Bot 的跨專案契約驗證。
+
+          ## 下載
+
+          - Windows x64、self-contained、單一 EXE 可攜版。
+          - 不需要另外安裝 .NET。
+          - SHA-256：``$env:RELEASE_SHA256``
+
+          > 此版本仍為測試版，建議先完成 Discord ``/pair``，並保持 League Client 與 Companion 開啟。
+          "@ | Set-Content -LiteralPath $notesPath -Encoding utf8
+
+          "notes_path=$notesPath" >> $env:GITHUB_OUTPUT
+
+      - name: Create or update GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+          RELEASE_ZIP: ${{ steps.package.outputs.zip_path }}
+          RELEASE_NOTES: ${{ steps.notes.outputs.notes_path }}
+          IS_PRERELEASE: ${{ steps.version.outputs.is_prerelease }}
+        run: |
+          $title = "LoL Companion v$env:RELEASE_VERSION"
+
+          if (gh release view $env:RELEASE_TAG --repo $env:GITHUB_REPOSITORY *> $null) {
+            $editArguments = @(
+              "release", "edit", $env:RELEASE_TAG,
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--title", $title,
+              "--notes-file", $env:RELEASE_NOTES
+            )
+
+            if ($env:IS_PRERELEASE -eq "true") {
+              $editArguments += "--prerelease"
+            } else {
+              $editArguments += "--latest"
+            }
+
+            gh @editArguments
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+            gh release upload $env:RELEASE_TAG $env:RELEASE_ZIP `
+              --repo $env:GITHUB_REPOSITORY `
+              --clobber
+          } else {
+            $createArguments = @(
+              "release", "create", $env:RELEASE_TAG,
+              $env:RELEASE_ZIP,
+              "--repo", $env:GITHUB_REPOSITORY,
+              "--verify-tag",
+              "--title", $title,
+              "--notes-file", $env:RELEASE_NOTES
+            )
+
+            if ($env:IS_PRERELEASE -eq "true") {
+              $createArguments += "--prerelease"
+            } else {
+              $createArguments += "--latest"
+            }
+
+            gh @createArguments
+          }
+
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
