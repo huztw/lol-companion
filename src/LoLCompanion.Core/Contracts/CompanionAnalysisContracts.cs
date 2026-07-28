@@ -45,7 +45,12 @@ public sealed record CompanionAnalysisParticipantV2(
     double? TotalHealsOnTeammates,
     double? TotalDamageShieldedOnTeammates,
     IReadOnlyList<int> Items,
-    IReadOnlyList<int> Augments
+    IReadOnlyList<int> Augments,
+    double? TotalHeal = null,
+    double? DamageSelfMitigated = null,
+    double? DamageDealtToTurrets = null,
+    double? DamageDealtToObjectives = null,
+    double? TotalTimeCrowdControlDealt = null
 );
 
 public sealed record CompanionAnalysisMatchV2(string MatchId, string GameDataVersion);

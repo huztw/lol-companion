@@ -48,7 +48,12 @@ public sealed record LcuMatchParticipantDto(
     double? TotalHealsOnTeammates,
     double? TotalDamageShieldedOnTeammates,
     IReadOnlyList<int>? Items = null,
-    IReadOnlyList<int>? Augments = null
+    IReadOnlyList<int>? Augments = null,
+    double? TotalHeal = null,
+    double? DamageSelfMitigated = null,
+    double? DamageDealtToTurrets = null,
+    double? DamageDealtToObjectives = null,
+    double? TotalTimeCrowdControlDealt = null
 );
 
 public sealed record LcuTimelineDto(

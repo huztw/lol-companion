@@ -687,7 +687,12 @@ static async Task TestNestedDetailMappingAsync()
                         "assists": 10,
                         "totalDamageDealtToChampions": 25000,
                         "totalDamageTaken": 14000,
-                        "timeCCingOthers": 30
+                        "timeCCingOthers": 30,
+                        "totalHeal": 900,
+                        "damageSelfMitigated": 18000,
+                        "damageDealtToTurrets": 450,
+                        "damageDealtToObjectives": 700,
+                        "totalTimeCrowdControlDealt": 95
                       }
                     },
                     {
@@ -718,6 +723,11 @@ static async Task TestNestedDetailMappingAsync()
     Assert(detail.Participants[0].ChampionName == "Champion #1", "Expected missing championName to use the stable fallback label.");
     Assert(detail.Participants[0].TotalHealsOnTeammates is null, "Expected missing heal metric to remain null.");
     Assert(detail.Participants[0].TotalDamageShieldedOnTeammates is null, "Expected missing shield metric to remain null.");
+    Assert(detail.Participants[0].TotalHeal == 900, "Expected nested total heal metric to round-trip.");
+    Assert(detail.Participants[0].DamageSelfMitigated == 18000, "Expected nested self-mitigation metric to round-trip.");
+    Assert(detail.Participants[0].DamageDealtToTurrets == 450, "Expected nested turret metric to round-trip.");
+    Assert(detail.Participants[0].DamageDealtToObjectives == 700, "Expected nested objective metric to round-trip.");
+    Assert(detail.Participants[0].TotalTimeCrowdControlDealt == 95, "Expected nested extended crowd-control metric to round-trip.");
 }
 
 static async Task TestFlatDetailCompatibilityAsync()
@@ -762,7 +772,12 @@ static async Task TestFlatDetailCompatibilityAsync()
                       "totalDamageTaken": 9000,
                       "timeCCingOthers": 22,
                       "totalHealsOnTeammates": 300,
-                      "totalDamageShieldedOnTeammates": 120
+                      "totalDamageShieldedOnTeammates": 120,
+                      "totalHeal": 800,
+                      "damageSelfMitigated": 12000,
+                      "damageDealtToTurrets": 350,
+                      "damageDealtToObjectives": 640,
+                      "totalTimeCrowdControlDealt": 72
                     }
                   ]
                 }
@@ -776,6 +791,11 @@ static async Task TestFlatDetailCompatibilityAsync()
     Assert(detail.Participants[0].ChampionName == "Annie", "Expected flat champion name to keep explicit schema priority.");
     Assert(detail.Participants[0].TotalHealsOnTeammates == 300, "Expected flat heal metric to round-trip.");
     Assert(detail.Participants[0].TotalDamageShieldedOnTeammates == 120, "Expected flat shield metric to round-trip.");
+    Assert(detail.Participants[0].TotalHeal == 800, "Expected flat total heal metric to round-trip.");
+    Assert(detail.Participants[0].DamageSelfMitigated == 12000, "Expected flat self-mitigation metric to round-trip.");
+    Assert(detail.Participants[0].DamageDealtToTurrets == 350, "Expected flat turret metric to round-trip.");
+    Assert(detail.Participants[0].DamageDealtToObjectives == 640, "Expected flat objective metric to round-trip.");
+    Assert(detail.Participants[0].TotalTimeCrowdControlDealt == 72, "Expected flat extended crowd-control metric to round-trip.");
 }
 
 static async Task TestDetailSchemaFailureAsync()

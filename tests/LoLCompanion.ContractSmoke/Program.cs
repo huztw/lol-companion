@@ -67,7 +67,14 @@ Assert(handler.Requests[3].ControlJobId == serverIssuedControlJobId, "Expected a
 Assert(handler.Requests[3].ContentType == "application/json; charset=utf-8", "Expected JSON utf-8 content type on submit.");
 Assert(handler.Requests[3].Body == Encoding.UTF8.GetString(submitBody), "Expected submit body to pass through unchanged.");
 Assert(submitDocument.RootElement.GetProperty("schemaVersion").GetInt32() == 4, "Expected shared schema 4 fixture.");
-Assert(submitDocument.RootElement.GetProperty("payload").GetProperty("participants")[0].GetProperty("championId").GetInt32() == 1, "Expected numeric champion id in shared fixture.");
+var firstFixtureParticipant = submitDocument.RootElement.GetProperty("payload").GetProperty("participants")[0];
+Assert(firstFixtureParticipant.GetProperty("championId").GetInt32() == 1, "Expected numeric champion id in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("totalHeal").GetDouble() == 2200, "Expected total heal in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("damageSelfMitigated").GetDouble() == 9000, "Expected self-mitigation in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("damageDealtToTurrets").GetDouble() == 450, "Expected turret damage in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("damageDealtToObjectives").GetDouble() == 700, "Expected objective damage in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("timeCCingOthers").GetDouble() == 35, "Expected canonical crowd-control metric in shared fixture.");
+Assert(firstFixtureParticipant.GetProperty("totalTimeCrowdControlDealt").GetDouble() == 95, "Expected extended crowd-control validation metric in shared fixture.");
 Assert(submitDocument.RootElement.GetProperty("payload").GetProperty("match").GetProperty("gameDataVersion").GetString() == "16.14.794.5912", "Expected shared game data version.");
 Assert(handler.Requests[4].RequestUri?.AbsoluteUri == "https://companion.local/companion/analyses/job%2Fwith%20spaces%3F%3Dyes", "Expected escaped job id path.");
 Assert(handler.Requests[4].Method == HttpMethod.Get, "Expected GET for status.");

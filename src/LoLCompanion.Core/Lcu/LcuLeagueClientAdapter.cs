@@ -263,7 +263,12 @@ public sealed class LcuLeagueClientAdapter
                     TotalHealsOnTeammates: TryGetDouble(stats, "totalHealsOnTeammates"),
                     TotalDamageShieldedOnTeammates: TryGetDouble(stats, "totalDamageShieldedOnTeammates"),
                     Items: ReadConfigurationIds(stats, "item", 7),
-                    Augments: ReadConfigurationIds(stats, "playerAugment", 6, 1)));
+                    Augments: ReadConfigurationIds(stats, "playerAugment", 6, 1),
+                    TotalHeal: TryGetDouble(stats, "totalHeal"),
+                    DamageSelfMitigated: TryGetDouble(stats, "damageSelfMitigated"),
+                    DamageDealtToTurrets: TryGetDouble(stats, "damageDealtToTurrets"),
+                    DamageDealtToObjectives: TryGetDouble(stats, "damageDealtToObjectives"),
+                    TotalTimeCrowdControlDealt: TryGetDouble(stats, "totalTimeCrowdControlDealt")));
             }
         }
         else
@@ -290,7 +295,12 @@ public sealed class LcuLeagueClientAdapter
                     TotalHealsOnTeammates: TryGetDouble(participant, "totalHealsOnTeammates"),
                     TotalDamageShieldedOnTeammates: TryGetDouble(participant, "totalDamageShieldedOnTeammates"),
                     Items: ReadConfigurationIds(participant, "item", 7),
-                    Augments: ReadConfigurationIds(participant, "playerAugment", 6, 1)));
+                    Augments: ReadConfigurationIds(participant, "playerAugment", 6, 1),
+                    TotalHeal: TryGetDouble(participant, "totalHeal"),
+                    DamageSelfMitigated: TryGetDouble(participant, "damageSelfMitigated"),
+                    DamageDealtToTurrets: TryGetDouble(participant, "damageDealtToTurrets"),
+                    DamageDealtToObjectives: TryGetDouble(participant, "damageDealtToObjectives"),
+                    TotalTimeCrowdControlDealt: TryGetDouble(participant, "totalTimeCrowdControlDealt")));
             }
         }
 

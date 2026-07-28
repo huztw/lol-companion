@@ -156,7 +156,12 @@ public sealed class CompanionAnalysisNormalizer
             NormalizeMetric(participant.TotalHealsOnTeammates, MaxDamageValue, $"participants[{index}].totalHealsOnTeammates"),
             NormalizeMetric(participant.TotalDamageShieldedOnTeammates, MaxDamageValue, $"participants[{index}].totalDamageShieldedOnTeammates"),
             NormalizeConfigurationIds(participant.Items, MaxFinalItems, $"participants[{index}].items"),
-            NormalizeConfigurationIds(participant.Augments, MaxAugments, $"participants[{index}].augments")
+            NormalizeConfigurationIds(participant.Augments, MaxAugments, $"participants[{index}].augments"),
+            NormalizeMetric(participant.TotalHeal, MaxDamageValue, $"participants[{index}].totalHeal"),
+            NormalizeMetric(participant.DamageSelfMitigated, MaxDamageValue, $"participants[{index}].damageSelfMitigated"),
+            NormalizeMetric(participant.DamageDealtToTurrets, MaxDamageValue, $"participants[{index}].damageDealtToTurrets"),
+            NormalizeMetric(participant.DamageDealtToObjectives, MaxDamageValue, $"participants[{index}].damageDealtToObjectives"),
+            NormalizeMetric(participant.TotalTimeCrowdControlDealt, MaxCcValue, $"participants[{index}].totalTimeCrowdControlDealt")
         );
     }
 
