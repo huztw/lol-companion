@@ -2,7 +2,7 @@ namespace LoLCompanion.Core.Contracts;
 
 public static class CompanionAnalysisContract
 {
-    public const int SchemaVersion = 4;
+    public const int SchemaVersion = 5;
     public const int MaxRequestBytes = 256 * 1024;
 }
 
@@ -50,7 +50,8 @@ public sealed record CompanionAnalysisParticipantV2(
     double? DamageSelfMitigated = null,
     double? DamageDealtToTurrets = null,
     double? DamageDealtToObjectives = null,
-    double? TotalTimeCrowdControlDealt = null
+    double? TotalTimeCrowdControlDealt = null,
+    int? ChampionLevel = null
 );
 
 public sealed record CompanionAnalysisMatchV2(string MatchId, string GameDataVersion);

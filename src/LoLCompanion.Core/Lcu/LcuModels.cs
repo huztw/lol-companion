@@ -53,7 +53,8 @@ public sealed record LcuMatchParticipantDto(
     double? DamageSelfMitigated = null,
     double? DamageDealtToTurrets = null,
     double? DamageDealtToObjectives = null,
-    double? TotalTimeCrowdControlDealt = null
+    double? TotalTimeCrowdControlDealt = null,
+    int? ChampionLevel = null
 );
 
 public sealed record LcuTimelineDto(

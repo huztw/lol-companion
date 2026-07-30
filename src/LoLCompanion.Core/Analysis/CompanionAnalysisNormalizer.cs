@@ -28,6 +28,7 @@ public sealed class CompanionAnalysisNormalizer
     private const int MaxAugments = 6;
     private const int MaxConfigurationId = 9_999_999;
     private const int MaxChampionId = 9_999_999;
+    private const int MaxChampionLevel = 30;
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
@@ -161,8 +162,20 @@ public sealed class CompanionAnalysisNormalizer
             NormalizeMetric(participant.DamageSelfMitigated, MaxDamageValue, $"participants[{index}].damageSelfMitigated"),
             NormalizeMetric(participant.DamageDealtToTurrets, MaxDamageValue, $"participants[{index}].damageDealtToTurrets"),
             NormalizeMetric(participant.DamageDealtToObjectives, MaxDamageValue, $"participants[{index}].damageDealtToObjectives"),
-            NormalizeMetric(participant.TotalTimeCrowdControlDealt, MaxCcValue, $"participants[{index}].totalTimeCrowdControlDealt")
+            NormalizeMetric(participant.TotalTimeCrowdControlDealt, MaxCcValue, $"participants[{index}].totalTimeCrowdControlDealt"),
+            NormalizeChampionLevel(participant.ChampionLevel, $"participants[{index}].championLevel")
         );
+    }
+
+    private static int? NormalizeChampionLevel(int? value, string label)
+    {
+        if (!value.HasValue)
+        {
+            return null;
+        }
+
+        ValidateBoundedInt(value.Value, 1, MaxChampionLevel, label);
+        return value.Value;
     }
 
     private static IReadOnlyList<int> NormalizeConfigurationIds(IReadOnlyList<int>? values, int maximumCount, string label)

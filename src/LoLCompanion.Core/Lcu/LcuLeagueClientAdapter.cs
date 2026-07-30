@@ -268,7 +268,8 @@ public sealed class LcuLeagueClientAdapter
                     DamageSelfMitigated: TryGetDouble(stats, "damageSelfMitigated"),
                     DamageDealtToTurrets: TryGetDouble(stats, "damageDealtToTurrets"),
                     DamageDealtToObjectives: TryGetDouble(stats, "damageDealtToObjectives"),
-                    TotalTimeCrowdControlDealt: TryGetDouble(stats, "totalTimeCrowdControlDealt")));
+                    TotalTimeCrowdControlDealt: TryGetDouble(stats, "totalTimeCrowdControlDealt"),
+                    ChampionLevel: TryGetSafeInt32(stats, "champLevel")));
             }
         }
         else
@@ -300,7 +301,8 @@ public sealed class LcuLeagueClientAdapter
                     DamageSelfMitigated: TryGetDouble(participant, "damageSelfMitigated"),
                     DamageDealtToTurrets: TryGetDouble(participant, "damageDealtToTurrets"),
                     DamageDealtToObjectives: TryGetDouble(participant, "damageDealtToObjectives"),
-                    TotalTimeCrowdControlDealt: TryGetDouble(participant, "totalTimeCrowdControlDealt")));
+                    TotalTimeCrowdControlDealt: TryGetDouble(participant, "totalTimeCrowdControlDealt"),
+                    ChampionLevel: TryGetSafeInt32(participant, "champLevel")));
             }
         }
 

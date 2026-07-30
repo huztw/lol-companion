@@ -337,7 +337,7 @@ static async Task TestChampionSummaryResolutionAsync()
         }
     }).ToArray();
 
-    var nestedParticipants = fixture.Participants.Select(participant => new
+    var nestedParticipants = fixture.Participants.Select((participant, index) => new
     {
         participantId = participant.ParticipantId,
         teamId = participant.TeamId,
@@ -348,6 +348,7 @@ static async Task TestChampionSummaryResolutionAsync()
             kills = participant.Kills,
             deaths = participant.Deaths,
             assists = participant.Assists,
+            champLevel = 18 - (index % 2),
             totalDamageDealtToChampions = participant.TotalDamageDealtToChampions ?? 0,
             totalDamageTaken = participant.TotalDamageTaken ?? 0,
             timeCCingOthers = participant.TimeCCingOthers ?? 0
@@ -424,6 +425,7 @@ static async Task TestChampionSummaryResolutionAsync()
     Assert(summaryCalls == 1, "Expected champion summary to be fetched only once per adapter.");
     Assert(matches[0].ChampionName == "Annie", "Expected recent champion name to resolve from summary cache.");
     Assert(detail.Participants[0].ChampionName == "Annie", "Expected detail champion name to resolve from summary cache.");
+    Assert(detail.Participants[0].ChampionLevel == 18, "Expected nested LCU stats to expose final champion level.");
     Assert(normalized.Participants.Count == 10, "Expected nested detail payload to normalize successfully.");
     Assert(normalized.Participants[0].ChampionName == "Annie", "Expected normalized payload to preserve resolved champion names.");
 }
@@ -548,6 +550,7 @@ static async Task TestDetailAndTimelineAsync()
                           "win": true,
                           "championId": 1,
                           "championName": "Annie",
+                          "champLevel": 17,
                           "kills": 8,
                           "deaths": 3,
                           "assists": 10,
@@ -599,6 +602,7 @@ static async Task TestDetailAndTimelineAsync()
 
     var detail = await adapter.GetMatchDetailAsync(431945471);
     Assert(detail.QueueId == 2400, "Expected detailed queue id.");
+    Assert(detail.Participants[0].ChampionLevel == 17, "Expected direct LCU participant to expose final champion level.");
     Assert(detail.Participants[0].Items!.SequenceEqual([1000, 1001, 1002, 1003, 1004, 1005, 1006]), "Expected adapter to parse item0..item6.");
     Assert(detail.Participants[0].Augments!.SequenceEqual([2001, 2002, 2003, 2004, 2005, 2006]), "Expected adapter to parse playerAugment1..playerAugment6.");
     var detailRequests = requests.Count(request => request?.AbsolutePath.EndsWith("/games/431945471", StringComparison.Ordinal) == true);
@@ -1096,7 +1100,8 @@ static async Task TestCompanionAnalysisNormalizerAsync()
             participant.TotalDamageTaken,
             participant.TimeCCingOthers,
             participant.TotalHealsOnTeammates,
-            participant.TotalDamageShieldedOnTeammates)).ToArray());
+            participant.TotalDamageShieldedOnTeammates,
+            ChampionLevel: 18 - ((participant.ParticipantId - 1) % 2))).ToArray());
     var timeline = new LcuTimelineResult(
         true,
         new LcuTimelineDto(
@@ -1115,6 +1120,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(normalized.Participants.Count == 10, "Expected exactly ten participants.");
     Assert(normalized.Participants.Count(participant => participant.TeamId == 100) == 5, "Expected exactly five teammates.");
     Assert(normalized.Participants[0].ChampionId == 1, "Expected numeric champion id to be preserved.");
+    Assert(normalized.Participants[0].ChampionLevel == 18, "Expected final champion level to be preserved.");
     Assert(normalized.Timeline is not null, "Expected timeline to be present for available timeline.");
     Assert(normalized.Timeline!.Frames.Count == 2, "Expected timeline frame bound to survive.");
     Assert(normalized.Timeline.Events.Count == 2, "Expected timeline event bound to survive.");
@@ -1209,6 +1215,7 @@ static async Task TestCompanionAnalysisNormalizerAsync()
     Assert(!firstParticipant.TryGetProperty("totalHealsOnTeammates", out _), "Expected null heal metric to be omitted.");
     Assert(!firstParticipant.TryGetProperty("totalDamageShieldedOnTeammates", out _), "Expected null shield metric to be omitted.");
     Assert(firstParticipant.GetProperty("championId").GetInt32() == 1, "Expected numeric champion id to be serialized.");
+    Assert(firstParticipant.GetProperty("championLevel").GetInt32() == 18, "Expected final champion level to be serialized.");
 
     var unavailableRequest = new CompanionAnalysisSubmitRequest(
         "request-2",
@@ -1430,16 +1437,16 @@ static async Task TestCompanionAnalysisWorkflowAsync()
             DateTimeOffset.Parse("2026-07-25T10:00:00Z"),
             TimeSpan.FromMinutes(23),
             [
-                new LcuMatchParticipantDto("player-a", "PlayerA", "TST1", 1, 100, true, 1, "Annie", 8, 2, 10, 25000, 14000, 30, 1000, 500),
-                new LcuMatchParticipantDto("player-b", "PlayerB", "TST1", 2, 100, true, 2, "Lux", 6, 3, 12, 22000, 11000, 18, 1200, 700),
-                new LcuMatchParticipantDto("player-c", "PlayerC", "TST1", 3, 100, true, 3, "Leona", 2, 4, 14, 9000, 21000, 40, 0, 200),
-                new LcuMatchParticipantDto("player-d", "PlayerD", "TST1", 4, 100, true, 4, "Braum", 1, 5, 9, 7000, 18000, 28, 0, 500),
-                new LcuMatchParticipantDto("player-e", "PlayerE", "TST1", 5, 100, true, 5, "Seraphine", 1, 3, 11, 11000, 9000, 12, 2400, 1000),
-                new LcuMatchParticipantDto("player-x1", "PlayerX1", "TST1", 6, 200, false, 6, "Ahri", 4, 5, 3, 18000, 9000, 8, 0, 0),
-                new LcuMatchParticipantDto("player-x2", "PlayerX2", "TST1", 7, 200, false, 7, "Ezreal", 5, 5, 2, 17000, 8500, 4, 0, 0),
-                new LcuMatchParticipantDto("player-x3", "PlayerX3", "TST1", 8, 200, false, 8, "Nami", 2, 6, 5, 9000, 7000, 12, 1100, 400),
-                new LcuMatchParticipantDto("player-x4", "PlayerX4", "TST1", 9, 200, false, 9, "Sett", 3, 4, 4, 13000, 16000, 16, 0, 0),
-                new LcuMatchParticipantDto("player-x5", "PlayerX5", "TST1", 10, 200, false, 10, "Sona", 1, 5, 6, 8000, 6000, 6, 1800, 900)
+                new LcuMatchParticipantDto("player-a", "PlayerA", "TST1", 1, 100, true, 1, "Annie", 8, 2, 10, 25000, 14000, 30, 1000, 500, ChampionLevel: 18),
+                new LcuMatchParticipantDto("player-b", "PlayerB", "TST1", 2, 100, true, 2, "Lux", 6, 3, 12, 22000, 11000, 18, 1200, 700, ChampionLevel: 18),
+                new LcuMatchParticipantDto("player-c", "PlayerC", "TST1", 3, 100, true, 3, "Leona", 2, 4, 14, 9000, 21000, 40, 0, 200, ChampionLevel: 17),
+                new LcuMatchParticipantDto("player-d", "PlayerD", "TST1", 4, 100, true, 4, "Braum", 1, 5, 9, 7000, 18000, 28, 0, 500, ChampionLevel: 17),
+                new LcuMatchParticipantDto("player-e", "PlayerE", "TST1", 5, 100, true, 5, "Seraphine", 1, 3, 11, 11000, 9000, 12, 2400, 1000, ChampionLevel: 18),
+                new LcuMatchParticipantDto("player-x1", "PlayerX1", "TST1", 6, 200, false, 6, "Ahri", 4, 5, 3, 18000, 9000, 8, 0, 0, ChampionLevel: 18),
+                new LcuMatchParticipantDto("player-x2", "PlayerX2", "TST1", 7, 200, false, 7, "Ezreal", 5, 5, 2, 17000, 8500, 4, 0, 0, ChampionLevel: 17),
+                new LcuMatchParticipantDto("player-x3", "PlayerX3", "TST1", 8, 200, false, 8, "Nami", 2, 6, 5, 9000, 7000, 12, 1100, 400, ChampionLevel: 17),
+                new LcuMatchParticipantDto("player-x4", "PlayerX4", "TST1", 9, 200, false, 9, "Sett", 3, 4, 4, 13000, 16000, 16, 0, 0, ChampionLevel: 18),
+                new LcuMatchParticipantDto("player-x5", "PlayerX5", "TST1", 10, 200, false, 10, "Sona", 1, 5, 6, 8000, 6000, 6, 1800, 900, ChampionLevel: 17)
             ]);
     var timeline = new LcuTimelineResult(false, null, "timeline missing");
     var source = new FakeAnalysisSource(
@@ -1515,7 +1522,7 @@ static async Task TestCompanionAnalysisWorkflowAsync()
         {
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"schemaVersion":1,"analysis":{"currentSchemaVersion":4,"minimumSchemaVersion":4}}""", Encoding.UTF8, "application/json")
+                Content = new StringContent("""{"schemaVersion":1,"analysis":{"currentSchemaVersion":5,"minimumSchemaVersion":4}}""", Encoding.UTF8, "application/json")
             };
         }
         if (path == "/companion/analyses" && request.Method == HttpMethod.Post)
@@ -1943,7 +1950,7 @@ sealed class WorkflowHandler : HttpMessageHandler
         {
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("""{"schemaVersion":1,"current":{"latestVersion":"1.2.3","downloadUrl":"https://downloads.example.test/lol-companion","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}}""", Encoding.UTF8, "application/json")
+                Content = new StringContent("""{"schemaVersion":1,"current":{"latestVersion":"1.2.3","downloadUrl":"https://downloads.example.test/lol-companion","sha256":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},"analysis":{"currentSchemaVersion":5,"minimumSchemaVersion":4}}""", Encoding.UTF8, "application/json")
             };
         }
 

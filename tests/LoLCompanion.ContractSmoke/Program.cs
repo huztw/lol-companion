@@ -103,7 +103,7 @@ Assert(version.SchemaVersion == 1, "Expected version schema version.");
 Assert(version.Current.LatestVersion == "1.2.3", "Expected latest version.");
 Assert(version.Current.DownloadUrl == "https://example.com/Companion.zip", "Expected download url.");
 Assert(version.Current.Sha256 == "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "Expected sha256 checksum.");
-Assert(version.Analysis?.CurrentSchemaVersion == 4, "Expected current analysis schema version.");
+Assert(version.Analysis?.CurrentSchemaVersion == 5, "Expected current analysis schema version.");
 Assert(version.Analysis?.MinimumSchemaVersion == 4, "Expected minimum analysis schema version.");
 Assert(version.RemoteControl?.CurrentProtocolVersion == "remote-control-v1", "Expected current remote-control protocol.");
 Assert(version.RemoteControl?.MinimumProtocolVersion == "remote-control-v1", "Expected minimum remote-control protocol.");
@@ -204,7 +204,7 @@ sealed class FakeHandler : HttpMessageHandler
                 "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
               },
               "analysis": {
-                "currentSchemaVersion": 4,
+                "currentSchemaVersion": 5,
                 "minimumSchemaVersion": 4
               },
               "remoteControl": {
